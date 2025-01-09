@@ -67,6 +67,7 @@ func main() {
 		fmt.Println("  9.  Delete event id - By Room [" + roomEmail + "]")
 		fmt.Println("  10. Delete event id - By Organiser [" + organiserEmail + "]")
 		fmt.Println("  +-----------------------------------+")
+		fmt.Println("  11. Create Event at 10 to 10:30 tomorrow - By Organiser [" + organiserEmail + "]")
 		fmt.Print(":> ")
 
 		_, err = fmt.Scanf("%d", &choice)
@@ -108,6 +109,9 @@ func main() {
 		case 10:
 			// delete event by event id for the specified organiser
 			deleteEventByOrganiser(graphHelper)
+		case 11:
+			// delete event by event id for the specified organiser
+			createEventByOrganiser(graphHelper)
 		default:
 			fmt.Println("Invalid choice! Please try again.")
 		}
@@ -322,4 +326,25 @@ func deleteEventByRoom(graphHelper *graphhelper.GraphHelper) {
 		log.Printf("Error canceling event: %v", err)
 		return
 	}
+}
+
+func createEventByOrganiser(graphHelper *graphhelper.GraphHelper) {
+
+	organiser := graphHelper.GetOrganiserEmail()
+	if organiser == "" {
+		fmt.Println("No organiser found")
+		return
+	}
+	roomEmail := graphHelper.GetRoomEmail()
+	if roomEmail == "" {
+		fmt.Println("No room email found")
+		return
+	}
+
+	err := graphHelper.CreateEvent(organiser, roomEmail)
+	if err != nil {
+		log.Printf("Error creating event: %v", err)
+		return
+	}
+
 }

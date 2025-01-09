@@ -9,10 +9,11 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	abstractions "github.com/microsoft/kiota-abstractions-go"
 	auth "github.com/microsoft/kiota-authentication-azure-go"
 	msgraphsdk "github.com/microsoftgraph/msgraph-sdk-go"
-	"github.com/microsoftgraph/msgraph-sdk-go/models"
-	"github.com/microsoftgraph/msgraph-sdk-go/users"
+	graphmodels "github.com/microsoftgraph/msgraph-sdk-go/models"
+	graphusers "github.com/microsoftgraph/msgraph-sdk-go/users"
 )
 
 type GraphHelper struct {
@@ -131,9 +132,9 @@ func (g *GraphHelper) GetAppToken() (*string, error) {
 	return &token.Token, nil
 }
 
-func (g *GraphHelper) GetUsers() (models.UserCollectionResponseable, error) {
+func (g *GraphHelper) GetUsers() (graphmodels.UserCollectionResponseable, error) {
 	var topValue int32 = 25
-	query := users.UsersRequestBuilderGetQueryParameters{
+	query := graphusers.UsersRequestBuilderGetQueryParameters{
 		// Only request specific properties
 		Select: []string{"displayName", "id", "mail"},
 		// Get at most 25 results
@@ -144,12 +145,12 @@ func (g *GraphHelper) GetUsers() (models.UserCollectionResponseable, error) {
 
 	return g.appClient.Users().
 		Get(context.Background(),
-			&users.UsersRequestBuilderGetRequestConfiguration{
+			&graphusers.UsersRequestBuilderGetRequestConfiguration{
 				QueryParameters: &query,
 			})
 }
 
-func (g *GraphHelper) ListSubscriptions() (models.SubscriptionCollectionResponseable, error) {
+func (g *GraphHelper) ListSubscriptions() (graphmodels.SubscriptionCollectionResponseable, error) {
 
 	return g.appClient.Subscriptions().
 		Get(context.Background(), nil)
@@ -183,13 +184,13 @@ func (g *GraphHelper) ListRoom7DaysBookings(roomId string) {
 	endDateTime := now.Add(7 * 24 * time.Hour).Format(time.RFC3339) // Next 7 days for example
 
 	// Query parameters for fetching calendar events
-	queryParams := &users.ItemCalendarViewRequestBuilderGetQueryParameters{
+	queryParams := &graphusers.ItemCalendarViewRequestBuilderGetQueryParameters{
 		EndDateTime:   &endDateTime,
 		StartDateTime: &startDateTime,
 	}
 
 	// Configuration for the request
-	requestConfig := &users.ItemCalendarViewRequestBuilderGetRequestConfiguration{
+	requestConfig := &graphusers.ItemCalendarViewRequestBuilderGetRequestConfiguration{
 		QueryParameters: queryParams,
 	}
 
@@ -251,7 +252,7 @@ func (g *GraphHelper) CreateRoomSubscription(roomID string) error {
 	println("CreateRoomSubscription" + roomID)
 
 	// Define subscription parameters
-	subscription := models.NewSubscription()
+	subscription := graphmodels.NewSubscription()
 	changeType := "created,updated,deleted"
 	subscription.SetChangeType(&changeType)
 	notificationURL := g.GetNotificationUrl()
@@ -319,7 +320,7 @@ func (g *GraphHelper) DeleteSubscription(subscriptionId string) error {
 //   - error: An error object if the deletion fails, otherwise nil.
 func (g *GraphHelper) DeleteEvent(userId string, eventId string) error {
 
-	requestBody := users.NewItemEventsItemCancelPostRequestBody()
+	requestBody := graphusers.NewItemEventsItemCancelPostRequestBody()
 	comment := "System Canceled Event"
 	requestBody.SetComment(&comment) // Initialize a new Graph client
 
@@ -329,4 +330,129 @@ func (g *GraphHelper) DeleteEvent(userId string, eventId string) error {
 		return fmt.Errorf("failed to delete event: %v", err)
 	}
 	return nil
+}
+
+func (g *GraphHelper) CreateEvent(organiserEmail string, roomEmail string) error {
+
+	// Create an event for tomorrow at 10:00 AM for userId and set the room/location as roomId
+
+	startTime, endTime := GetTomorrowTimes()
+	println("Tomorrow at 10:00 AM:", startTime.String())
+	println("Tomorrow at 10:30 AM:", endTime.String())
+
+	headers := abstractions.NewRequestHeaders()
+	headers.Add("Prefer", "outlook.timezone=\"Pacific Standard Time\"")
+
+	configuration := &graphusers.ItemEventsRequestBuilderPostRequestConfiguration{
+		Headers: headers,
+	}
+	// description
+	requestBody := graphmodels.NewEvent()
+	subject := "Plan summer company picnic"
+	requestBody.SetSubject(&subject)
+	body := graphmodels.NewItemBody()
+	contentType := graphmodels.HTML_BODYTYPE
+	body.SetContentType(&contentType)
+	content := "Let's kick-start this event planning!"
+	body.SetContent(&content)
+	requestBody.SetBody(body)
+	// Time stuff
+	start := graphmodels.NewDateTimeTimeZone()
+	dateTime := startTime.UTC().Format("2006-01-02T15:04:05.999999999")
+	start.SetDateTime(&dateTime)
+	timeZone := "Pacific Standard Time"
+	start.SetTimeZone(&timeZone)
+	requestBody.SetStart(start)
+	end := graphmodels.NewDateTimeTimeZone()
+	dateTime = endTime.UTC().Format("2006-01-02T15:04:05.999999999")
+	end.SetDateTime(&dateTime)
+	timeZone = "Pacific Standard Time"
+	end.SetTimeZone(&timeZone)
+	requestBody.SetEnd(end)
+
+	// Attendees
+
+	// add organiser
+
+	organiser := graphmodels.NewAttendee()
+	orgEmailAddress := graphmodels.NewEmailAddress()
+	orgEmailAddress.SetAddress(&organiserEmail)
+	organiser.SetEmailAddress(orgEmailAddress)
+	orgType := graphmodels.REQUIRED_ATTENDEETYPE
+	organiser.SetTypeEscaped(&orgType)
+
+	/*	attendee := graphmodels.NewAttendee()
+		emailAddress := graphmodels.NewEmailAddress()
+		address := "DanaS@contoso.com"
+		emailAddress.SetAddress(&address)
+		name := "Dana Swope"
+		emailAddress.SetName(&name)
+		attendee.SetEmailAddress(emailAddress)
+		type1 := graphmodels.REQUIRED_ATTENDEETYPE
+		attendee.SetType(&type1)
+		attendee1 := graphmodels.NewAttendee()
+		emailAddress := graphmodels.NewEmailAddress()
+		address := "AlexW@contoso.com"
+		emailAddress.SetAddress(&address)
+		name := "Alex Wilber"
+		emailAddress.SetName(&name)
+		attendee1.SetEmailAddress(emailAddress)
+		type2 := graphmodels.REQUIRED_ATTENDEETYPE
+		attendee1.SetType(&type2) */
+
+	roomAttendee := graphmodels.NewAttendee()
+	roomEmailAddress := graphmodels.NewEmailAddress()
+	roomEmailAddress.SetAddress(&roomEmail)
+	roomResourceType := graphmodels.RESOURCE_ATTENDEETYPE
+	roomAttendee.SetTypeEscaped(&roomResourceType)
+	roomAttendee.SetEmailAddress(roomEmailAddress)
+	attendees := []graphmodels.Attendeeable{
+		//organiser,
+		roomAttendee,
+	}
+	requestBody.SetAttendees(attendees)
+
+	location := graphmodels.NewLocation()
+	//locationType := graphmodels.DEFAULT_LOCATIONTYPE
+	//location.SetLocationType(&locationType)
+	location.SetLocationEmailAddress(&roomEmail)
+	//displayName := "10.10.10"
+	//location.SetDisplayName(&displayName)
+	requestBody.SetLocation(location)
+
+	//locations := []graphmodels.Locationable{
+	//	location,
+	//}
+	//requestBody.SetLocations(locations)
+
+	allowNewTimeProposals := false
+	requestBody.SetAllowNewTimeProposals(&allowNewTimeProposals)
+
+	// To initialize your graphClient, see https://learn.microsoft.com/en-us/graph/sdks/create-client?from=snippets&tabs=go
+	events, err := g.appClient.Users().ByUserId(organiserEmail).Events().Post(context.Background(), requestBody, configuration)
+	//g.appClient.Users().ByUserId(organiserEmail).Calendar().Events().Post(context.Background(), requestBody, configuration)
+	if err != nil {
+		fmt.Println("Failed to create event:", err)
+		return err
+	}
+
+	fmt.Printf("%v", events)
+	return nil
+}
+
+func GetTomorrowTimes() (time.Time, time.Time) {
+	// Get today's date
+	now := time.Now()
+
+	// Calculate tomorrow's date
+	tomorrow := now.AddDate(0, 0, 1)
+
+	// Set the times for tomorrow at 10:00 AM and 10:30 AM
+	tomorrow10am := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 10, 0, 0, 0, tomorrow.Location())
+	tomorrow1030am := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 10, 30, 0, 0, tomorrow.Location())
+
+	tomorrow10am.Format("2016-11-20T18:23:45.9356913Z")
+	tomorrow1030am.Format("2016-11-20T18:23:45.9356913Z")
+
+	return tomorrow10am, tomorrow1030am
 }
