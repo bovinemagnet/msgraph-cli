@@ -28,3 +28,6 @@ go.work.sum
 ## Compiled and built version
 msgraph-cli
 msgraph-cli.exe
+
+.DS_Store
+*.bak

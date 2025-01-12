@@ -3,6 +3,7 @@ package graphhelper
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -150,6 +151,34 @@ func (g *GraphHelper) GetUsers() (graphmodels.UserCollectionResponseable, error)
 			})
 }
 
+func (g *GraphHelper) ListUsers(w io.Writer) {
+	users, err := g.GetUsers()
+	if err != nil {
+		log.Panicf("Error getting users: %v", err)
+	}
+
+	// Output each user's details
+	for _, user := range users.GetValue() {
+		fmt.Fprintf(w, "User: %s\n", *user.GetDisplayName())
+		fmt.Fprintf(w, "  ID: %s\n", *user.GetId())
+
+		noEmail := "NO EMAIL"
+		email := user.GetMail()
+		if email == nil {
+			email = &noEmail
+		}
+		fmt.Fprintf(w, "  Email: %s\n", *email)
+	}
+
+	// If GetOdataNextLink does not return nil,
+	// there are more users available on the server
+	nextLink := users.GetOdataNextLink()
+
+	fmt.Fprintln(w, "")
+	fmt.Fprintf(w, "More users available? %t\n", nextLink != nil)
+	fmt.Fprintf(w, "\n")
+}
+
 func (g *GraphHelper) ListSubscriptions() (graphmodels.SubscriptionCollectionResponseable, error) {
 
 	return g.appClient.Subscriptions().
@@ -157,28 +186,42 @@ func (g *GraphHelper) ListSubscriptions() (graphmodels.SubscriptionCollectionRes
 
 }
 
+func (g *GraphHelper) ListRoomsAll() (graphmodels.RoomListCollectionResponseable, error) {
+	return g.appClient.Places().GraphRoomList().Get(context.Background(), nil)
+}
+
 // ListRooms
-func (g *GraphHelper) ListRooms() {
+func (g *GraphHelper) ListRooms(w io.Writer) {
 	// (places.GraphRoomRequestBuilder, error) {
 
 	rooms, err := g.appClient.Places().GraphRoom().Get(context.Background(), nil)
 	if err != nil {
-		fmt.Println("Failed to list rooms:", err)
+		fmt.Fprintln(w, "Failed to list rooms:", err)
 		return
 	}
 
 	for _, room := range rooms.GetValue() {
-		fmt.Printf("Room ID: %s\n", *room.GetId())
-		fmt.Printf("  Name: %s\n", *room.GetDisplayName())
-		fmt.Printf("  Capacity: %d\n", *room.GetCapacity())
-		fmt.Printf("  Email: %s\n", *room.GetEmailAddress())
+		fmt.Fprintf(w, "Room ID: %s\n", *room.GetId())
+		fmt.Fprintf(w, "  Name: %s\n", *room.GetDisplayName())
+		fmt.Fprintf(w, "  Capacity: %d\n", *room.GetCapacity())
+		fmt.Fprintf(w, "  Email: %s\n", *room.GetEmailAddress())
 	}
 
 	return
 
 }
 
-func (g *GraphHelper) ListRoom7DaysBookings(roomId string) {
+func (g *GraphHelper) DisplayAccessTokenA(w io.Writer) {
+	token, err := g.GetAppToken()
+	if err != nil {
+		log.Panicf("Error getting user token: %v\n", err)
+		fmt.Fprintf(w, "No token: %v\n", err)
+		return
+	}
+	fmt.Fprintf(w, "App-only token: %s\n", *token)
+}
+
+func (g *GraphHelper) ListRoom7DaysBookings(w io.Writer, roomId string) {
 	now := time.Now()
 	startDateTime := now.Format(time.RFC3339)
 	endDateTime := now.Add(7 * 24 * time.Hour).Format(time.RFC3339) // Next 7 days for example
@@ -197,36 +240,41 @@ func (g *GraphHelper) ListRoom7DaysBookings(roomId string) {
 	// Get the calendar view of the room
 	events, err := g.appClient.Users().ByUserId(roomId).CalendarView().Get(context.Background(), requestConfig)
 	if err != nil {
-		fmt.Println("Failed to get calendar view:", err)
+		fmt.Fprintln(w, "Failed to get calendar view:", err)
 		return
 	}
 
 	for _, event := range events.GetValue() {
-		fmt.Printf("Event Id : %s\n", *event.GetId())
-		fmt.Printf("  Subject: %s\n", *event.GetSubject())
-		fmt.Printf("  Start: %s, End: %s\n",
+		fmt.Fprintf(w, "[yellow]Event Id : [green]%s[white]\n", *event.GetId())
+		fmt.Fprintf(w, "  Subject: [blue]%s[white]\n", *event.GetSubject())
+		fmt.Fprintf(w, "  Start: %s, End: %s\n",
 			*event.GetStart().GetDateTime(),
 			*event.GetEnd().GetDateTime())
 		// Print start and end in local time
 
 		localStart, err := ConvertToLocalTime(*event.GetStart().GetDateTime())
 		if err != nil {
-			fmt.Println("Failed to convert start time to local:", err)
+			fmt.Fprintln(w, "Failed to convert start time to local:", err)
 			continue
 		} else {
-			fmt.Printf("  Local Start: %v\n", localStart)
+			fmt.Fprintf(w, "  Local Start: %v\n", localStart)
 		}
 		localEnd, err := ConvertToLocalTime(*event.GetEnd().GetDateTime())
 		if err != nil {
-			fmt.Println("Failed to convert end time to local:", err)
+			fmt.Fprintln(w, "Failed to convert end time to local:", err)
 			continue
 		} else {
-			fmt.Printf("  Local End: %v\n", localEnd)
+			fmt.Fprintf(w, "  Local End: %v\n", localEnd)
 		}
-		fmt.Printf("  OnlineMeeting: %t\n", *event.GetIsOnlineMeeting())
-		fmt.Printf("  isOrganiser: %t\n", *event.GetIsOrganizer())
-		fmt.Printf("  isCancelled: %t\n", *event.GetIsCancelled())
-		fmt.Printf("  Organiser: %v\n", *event.GetOrganizer().GetEmailAddress().GetAddress())
+		fmt.Fprintf(w, "  OnlineMeeting: %t\n", *event.GetIsOnlineMeeting())
+		if event.GetIsOrganizer() == nil || *event.GetIsOrganizer() == false {
+			fmt.Fprintf(w, "  isOrganiser: [red]%t[white]\n", *event.GetIsOrganizer())
+		} else {
+			fmt.Fprintf(w, "  isOrganiser: [green]%t[white]\n", *event.GetIsOrganizer())
+		}
+		fmt.Fprintf(w, "  isCancelled: %t\n", *event.GetIsCancelled())
+		fmt.Fprintf(w, "  Organiser: [yellow]%v[white]\n", *event.GetOrganizer().GetEmailAddress().GetAddress())
+		fmt.Fprintf(w, " \n")
 	}
 }
 
@@ -247,9 +295,7 @@ func ConvertToLocalTime(timeString string) (time.Time, error) {
 }
 
 // Function to create a Microsoft Graph subscription for room events
-func (g *GraphHelper) CreateRoomSubscription(roomID string) error {
-
-	println("CreateRoomSubscription" + roomID)
+func (g *GraphHelper) CreateRoomSubscription(w io.Writer, roomID string) error {
 
 	// Define subscription parameters
 	subscription := graphmodels.NewSubscription()
@@ -284,7 +330,7 @@ func (g *GraphHelper) CreateRoomSubscription(roomID string) error {
 	// Create the subscription
 	result, err := g.appClient.Subscriptions().Post(context.Background(), subscription, nil)
 	if err != nil {
-		fmt.Printf("failed to create subscription: %v", err.Error())
+		fmt.Fprintf(w, "failed to create subscription: %v", err.Error())
 		return fmt.Errorf("failed to create subscription: %v", err)
 	}
 
@@ -300,11 +346,11 @@ func (g *GraphHelper) CreateRoomSubscription(roomID string) error {
 //
 // Returns:
 //   - error: An error object if the deletion fails, otherwise nil.
-func (g *GraphHelper) DeleteSubscription(subscriptionId string) error {
+func (g *GraphHelper) DeleteSubscription(w io.Writer, subscriptionId string) error {
 
 	err := g.appClient.Subscriptions().BySubscriptionId(subscriptionId).Delete(context.Background(), nil)
 	if err != nil {
-		fmt.Printf("failed to delete subscription: %v", err.Error())
+		fmt.Fprintf(w, "failed to delete subscription: %v", err.Error())
 		return fmt.Errorf("failed to create subscription: %v", err)
 	}
 	return nil
@@ -318,7 +364,7 @@ func (g *GraphHelper) DeleteSubscription(subscriptionId string) error {
 //
 // Returns:
 //   - error: An error object if the deletion fails, otherwise nil.
-func (g *GraphHelper) DeleteEvent(userId string, eventId string) error {
+func (g *GraphHelper) DeleteEvent(w io.Writer, userId string, eventId string) error {
 
 	requestBody := graphusers.NewItemEventsItemCancelPostRequestBody()
 	comment := "System Canceled Event"
@@ -326,19 +372,19 @@ func (g *GraphHelper) DeleteEvent(userId string, eventId string) error {
 
 	err := g.appClient.Users().ByUserId(userId).Events().ByEventId(eventId).Delete(context.Background(), nil)
 	if err != nil {
-		fmt.Printf("failed to delete event: %v", err.Error())
+		fmt.Fprintf(w, "[red]failed to delete event:[%v] error:[%v][white] for [yellow]%s[white]\n", eventId, err.Error(), userId)
 		return fmt.Errorf("failed to delete event: %v", err)
 	}
 	return nil
 }
 
-func (g *GraphHelper) CreateEvent(organiserEmail string, roomEmail string) error {
+func (g *GraphHelper) CreateEvent(w io.Writer, organiserEmail string, roomEmail string) error {
 
 	// Create an event for tomorrow at 10:00 AM for userId and set the room/location as roomId
 
 	startTime, endTime := GetTomorrowTimes()
-	println("Tomorrow at 10:00 AM:", startTime.String())
-	println("Tomorrow at 10:30 AM:", endTime.String())
+	fmt.Fprintln(w, "Tomorrow at 10:00 AM:", startTime.String())
+	fmt.Fprintln(w, "Tomorrow at 10:30 AM:", endTime.String())
 
 	headers := abstractions.NewRequestHeaders()
 	headers.Add("Prefer", "outlook.timezone=\"Pacific Standard Time\"")
@@ -429,14 +475,42 @@ func (g *GraphHelper) CreateEvent(organiserEmail string, roomEmail string) error
 	requestBody.SetAllowNewTimeProposals(&allowNewTimeProposals)
 
 	// To initialize your graphClient, see https://learn.microsoft.com/en-us/graph/sdks/create-client?from=snippets&tabs=go
-	events, err := g.appClient.Users().ByUserId(organiserEmail).Events().Post(context.Background(), requestBody, configuration)
+	createdEvent, err := g.appClient.Users().ByUserId(organiserEmail).Events().Post(context.Background(), requestBody, configuration)
 	//g.appClient.Users().ByUserId(organiserEmail).Calendar().Events().Post(context.Background(), requestBody, configuration)
 	if err != nil {
-		fmt.Println("Failed to create event:", err)
+		fmt.Fprintln(w, "Failed to create event:", err)
 		return err
 	}
 
-	fmt.Printf("%v", events)
+	fmt.Fprintf(w, "[yellow]Event Id : [green]%s[white]\n", *createdEvent.GetId())
+	fmt.Fprintf(w, "  Subject: %s\n", *createdEvent.GetSubject())
+	fmt.Fprintf(w, "  Start: %s, End: %s\n",
+		*createdEvent.GetStart().GetDateTime(),
+		*createdEvent.GetEnd().GetDateTime())
+	// Print start and end in local time
+
+	localStart, err := ConvertToLocalTime(*createdEvent.GetStart().GetDateTime())
+	if err != nil {
+		fmt.Fprintln(w, "Failed to convert start time to local:", err)
+
+	} else {
+		fmt.Fprintf(w, "  Local Start: %v\n", localStart)
+	}
+	localEnd, err := ConvertToLocalTime(*createdEvent.GetEnd().GetDateTime())
+	if err != nil {
+		fmt.Fprintln(w, "Failed to convert end time to local:", err)
+
+	} else {
+		fmt.Fprintf(w, "  Local End: %v\n", localEnd)
+	}
+	fmt.Fprintf(w, "  OnlineMeeting: %t\n", *createdEvent.GetIsOnlineMeeting())
+	if createdEvent.GetIsOrganizer() == nil || *createdEvent.GetIsOrganizer() == false {
+		fmt.Fprintf(w, "  isOrganiser: [red]%t[white]\n", *createdEvent.GetIsOrganizer())
+	} else {
+		fmt.Fprintf(w, "  isOrganiser: [green]%t[white]\n", *createdEvent.GetIsOrganizer())
+	}
+	fmt.Fprintf(w, "  isCancelled: %t\n", *createdEvent.GetIsCancelled())
+	fmt.Fprintf(w, "  Organiser: [yellow]%v[white]\n", *createdEvent.GetOrganizer().GetEmailAddress().GetAddress())
 	return nil
 }
 
@@ -455,4 +529,151 @@ func GetTomorrowTimes() (time.Time, time.Time) {
 	tomorrow1030am.Format("2016-11-20T18:23:45.9356913Z")
 
 	return tomorrow10am, tomorrow1030am
+}
+
+func (g *GraphHelper) CreateEventAsRoom(w io.Writer, roomEmail string) error {
+
+	// Create an event for tomorrow at 10:00 AM for userId and set the room/location as roomId
+
+	startTime, endTime := GetTomorrowTimes()
+	println("Tomorrow at 10:00 AM:", startTime.String())
+	println("Tomorrow at 10:30 AM:", endTime.String())
+
+	headers := abstractions.NewRequestHeaders()
+	headers.Add("Prefer", "outlook.timezone=\"Pacific Standard Time\"")
+
+	configuration := &graphusers.ItemEventsRequestBuilderPostRequestConfiguration{
+		Headers: headers,
+	}
+	// description
+	requestBody := graphmodels.NewEvent()
+	subject := "Plan summer company picnic"
+	requestBody.SetSubject(&subject)
+	body := graphmodels.NewItemBody()
+	contentType := graphmodels.HTML_BODYTYPE
+	body.SetContentType(&contentType)
+	content := "Let's kick-start this event planning!"
+	body.SetContent(&content)
+	requestBody.SetBody(body)
+	// Time stuff
+	start := graphmodels.NewDateTimeTimeZone()
+	dateTime := startTime.UTC().Format("2006-01-02T15:04:05.999999999")
+	start.SetDateTime(&dateTime)
+	timeZone := "Pacific Standard Time"
+	start.SetTimeZone(&timeZone)
+	requestBody.SetStart(start)
+	end := graphmodels.NewDateTimeTimeZone()
+	dateTime = endTime.UTC().Format("2006-01-02T15:04:05.999999999")
+	end.SetDateTime(&dateTime)
+	timeZone = "Pacific Standard Time"
+	end.SetTimeZone(&timeZone)
+	requestBody.SetEnd(end)
+
+	// Attendees
+	roomAttendee := graphmodels.NewAttendee()
+	roomEmailAddress := graphmodels.NewEmailAddress()
+	roomEmailAddress.SetAddress(&roomEmail)
+	roomResourceType := graphmodels.RESOURCE_ATTENDEETYPE
+	roomAttendee.SetTypeEscaped(&roomResourceType)
+	roomAttendee.SetEmailAddress(roomEmailAddress)
+	attendees := []graphmodels.Attendeeable{
+		roomAttendee,
+	}
+	requestBody.SetAttendees(attendees)
+
+	location := graphmodels.NewLocation()
+	location.SetLocationEmailAddress(&roomEmail)
+	requestBody.SetLocation(location)
+
+	allowNewTimeProposals := false
+	requestBody.SetAllowNewTimeProposals(&allowNewTimeProposals)
+
+	// To initialize your graphClient, see https://learn.microsoft.com/en-us/graph/sdks/create-client?from=snippets&tabs=go
+	createdEvent, err := g.appClient.Users().ByUserId(roomEmail).Events().Post(context.Background(), requestBody, configuration)
+	if err != nil {
+		fmt.Fprintln(w, "Failed to create event:", err)
+		return err
+	}
+
+	fmt.Fprintf(w, "Event Id : %s\n", *createdEvent.GetId())
+	fmt.Fprintf(w, "  Subject: %s\n", *createdEvent.GetSubject())
+	fmt.Fprintf(w, "  Start: %s, End: %s\n",
+		*createdEvent.GetStart().GetDateTime(),
+		*createdEvent.GetEnd().GetDateTime())
+	// Print start and end in local time
+
+	localStart, err := ConvertToLocalTime(*createdEvent.GetStart().GetDateTime())
+	if err != nil {
+		fmt.Fprintln(w, "Failed to convert start time to local:", err)
+
+	} else {
+		fmt.Fprintf(w, "  Local Start: %v\n", localStart)
+	}
+	localEnd, err := ConvertToLocalTime(*createdEvent.GetEnd().GetDateTime())
+	if err != nil {
+		fmt.Fprintln(w, "Failed to convert end time to local:", err)
+
+	} else {
+		fmt.Fprintf(w, "  Local End: %v\n", localEnd)
+	}
+	fmt.Fprintf(w, "  OnlineMeeting: %t\n", *createdEvent.GetIsOnlineMeeting())
+	fmt.Fprintf(w, "  isOrganiser: %t\n", *createdEvent.GetIsOrganizer())
+	fmt.Fprintf(w, "  isCancelled: %t\n", *createdEvent.GetIsCancelled())
+	fmt.Fprintf(w, "  Organiser: %v\n", *createdEvent.GetOrganizer().GetEmailAddress().GetAddress())
+	return nil
+}
+
+func (g *GraphHelper) RoomExists(w io.Writer, roomEmail string) (bool, error) {
+
+	// look up the room by room email.
+	room, err := g.appClient.Users().ByUserId(roomEmail).Get(context.Background(), nil)
+	if err != nil {
+		// If there's an error, it might mean the room doesn't exist or you don't have permission
+		fmt.Fprintf(w, "Room with email %s does not exist or you lack permissions: %v\n", roomEmail, err)
+		return false, err
+	}
+
+	if room != nil {
+		fmt.Fprintf(w, "Room Info\n")
+		fmt.Fprintf(w, "  Id : %v\n", *room.GetId())
+		fmt.Fprintf(w, "  Display Name : %v\n", *room.GetDisplayName())
+		fmt.Fprintf(w, "  Type : %v\n", room.GetUserType())
+	}
+
+	// Check if the user is actually a room
+	if room.GetUserType() != nil && *room.GetUserType() == "Room" {
+		fmt.Fprintf(w, "Room with email %v exists and is a type=%v and isResource=%v. [%s]\n", roomEmail, room.GetUserType(), room.GetIsResourceAccount(), *room.GetId())
+
+		return true, nil
+	} else {
+		fmt.Fprintf(w, "User with email %v exists but is not a room.and is a type=%v and isResource=%v [%s]\n", roomEmail, room.GetUserType(), room.GetIsResourceAccount(), *room.GetId())
+		return false, nil
+	}
+
+}
+
+func (g *GraphHelper) RoomExists2(w io.Writer, roomEmail string) (bool, error) {
+
+	// look up the room by room email.
+	rooms, err := g.appClient.Places().ByPlaceId(roomEmail).GraphRoomList().Rooms().Get(context.Background(), nil)
+	if err != nil {
+		// If there's an error, it might mean the room doesn't exist or you don't have permission
+		fmt.Fprintf(w, "Room with email %s does not exist or you lack permissions: %v\n", roomEmail, err)
+		return false, err
+	}
+
+	for _, room := range rooms.GetValue() {
+		if room != nil {
+			fmt.Fprintf(w, "Room Info 2\n")
+			fmt.Fprintf(w, "  Id : %v\n", *room.GetId())
+			fmt.Fprintf(w, "  Display Name : %v\n", *room.GetDisplayName())
+			fmt.Fprintf(w, "  Type : %v\n", room.GetCapacity())
+		}
+	}
+	if err != nil {
+		// If there's an error, it might mean the room doesn't exist or you don't have permission
+		fmt.Fprintf(w, "Room with email %s does not exist or you lack permissions: %v\n", roomEmail, err)
+	}
+
+	return true, nil
 }

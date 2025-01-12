@@ -2,13 +2,306 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"sync"
 
 	"github.com/bovinemagnet/msgraph-cli/graphhelper"
+	"github.com/gdamore/tcell/v2"
 	"github.com/joho/godotenv"
+	"github.com/rivo/tview"
 )
+
+type App struct {
+	app            *tview.Application
+	menu           *tview.List
+	output         *tview.TextView
+	webhookOutput  *tview.TextView
+	graphHelper    *graphhelper.GraphHelper
+	layout         *tview.Flex
+	inputField     *tview.InputField
+	mu             sync.Mutex // For thread-safe updates to text views
+	roomEmail      string
+	organiserEmail string
+}
+
+func NewApp(graphHelper *graphhelper.GraphHelper) *App {
+	app := &App{
+		app:         tview.NewApplication(),
+		graphHelper: graphHelper,
+	}
+
+	// Initialize UI components
+	app.setupUI()
+	return app
+}
+
+func (a *App) handleCreateOneDaySubscription(email string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.output.Clear()
+	fmt.Fprintf(a.output, "Creating a 1 day subscription for [yellow]%s[white]...\n", email)
+
+	a.graphHelper.CreateRoomSubscription(a.output, email)
+
+}
+
+func (a *App) handleHelp() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.output.Clear()
+	fmt.Fprintf(a.output, "Showing the help text...\n\n")
+	fmt.Fprintf(a.output, `[yellow]Navigation Help:[white]
+	• Press [green]ESC[white] to switch focus between menu and output
+	• Use [green]PgUp[white]/[green]PgDn[white] to scroll when output has focus
+	• Use mouse wheel to scroll (if your terminal supports it)
+	• Use arrow keys [green]↑[white]/[green]↓[white] to scroll line by line
+	`)
+
+}
+
+func (a *App) handleDeleteEvent(email string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.output.Clear()
+	fmt.Fprintf(a.output, "Please enter the event ID in the input box below and press Enter\n")
+	fmt.Fprintf(a.output, "Will delete event for [yellow]%s[white]...\n\n", email)
+
+	// Store email for use in the input handler
+	a.inputField.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter {
+			eventId := a.inputField.GetText()
+			if eventId == "" {
+				fmt.Fprintf(a.output, "[red]Error: Event ID cannot be empty[white]\n")
+				return
+			} else {
+				fmt.Fprintf(a.output, "[white]Attepting to deleting event [yellow]%s[white] for [yellow]%s[white]...\n", eventId, email)
+			}
+
+			err := a.graphHelper.DeleteEvent(a.output, email, eventId)
+			if err != nil {
+				fmt.Fprintf(a.output, "[red]Error deleting event: %v[white]\n", err)
+			}
+
+			a.inputField.SetText("")
+			// Reset input handler to default
+			a.inputField.SetDoneFunc(func(key tcell.Key) {
+				if key == tcell.KeyEnter {
+					a.handleInput(a.inputField.GetText())
+					a.inputField.SetText("")
+				}
+			})
+			a.app.SetFocus(a.menu)
+		}
+	})
+	a.app.SetFocus(a.inputField)
+}
+
+func (a *App) handleCreateEvent(email string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.output.Clear()
+	fmt.Fprintf(a.output, "Creating an event for [yellow]%s[white]...\n", email)
+
+	a.graphHelper.CreateEvent(a.output, a.organiserEmail, a.roomEmail)
+
+}
+
+func (a *App) setupUI() {
+	// Create menu (left panel)
+	a.menu = tview.NewList()
+	a.menu.SetBorder(true)
+	a.menu.SetTitle("Menu")
+
+	a.menu.AddItem("Env", "Show the contents of the .env file", 'e', a.handleEnv)
+
+	a.menu.AddItem("Access Token", "Show the current access token", 't', a.handleAccessToken)
+
+	a.menu.AddItem("All Users", "List all users", 'u', a.handleListUsers)
+	a.menu.AddItem("All Subscriptions", "List all subscriptions", 's', a.HandleListSubscriptions)
+	a.menu.AddItem("All Rooms", "List all rooms", 'r', a.handleListRooms)
+
+	a.menu.AddItem("Room Bookings (Organiser)", "List room bookings for "+a.organiserEmail, 'O', func() {
+		a.handleListRoomBookings(a.organiserEmail)
+	})
+	a.menu.AddItem("Room Bookings (Room)", "List room bookings for "+a.roomEmail, 'R', func() {
+		a.handleListRoomBookings(a.roomEmail)
+	})
+	a.menu.AddItem("Org Subscribe", "Create a 1 day subscription for "+a.organiserEmail, '7', func() {
+		a.handleCreateOneDaySubscription(a.organiserEmail)
+	})
+	a.menu.AddItem("Room Subscribe", "Create a 1 day subscription for"+a.roomEmail, '8', func() {
+		a.handleCreateOneDaySubscription(a.roomEmail)
+	})
+
+	a.menu.AddItem("Delete event", " id - By Room  "+a.roomEmail+" ", '9', func() {
+		a.handleDeleteEvent(a.roomEmail)
+	})
+	a.menu.AddItem("Delete event", " id - By Organiser  "+a.organiserEmail+"]", '9', func() {
+		a.handleDeleteEvent(a.organiserEmail)
+	})
+
+	a.menu.AddItem(" Create Event", "at 10 to 10:30 tomorrow - By Room ["+a.roomEmail+"]", 11, func() {
+		a.handleCreateEvent(a.roomEmail)
+	})
+	a.menu.AddItem(" Create Event", "at 10 to 10:30 tomorrow - By Organiser ["+a.organiserEmail+"]", 12, func() {
+		a.handleCreateEvent(a.organiserEmail)
+	})
+	//	fmt.Println("  13. Check room exists - By Room [" + roomEmail + "]")
+	//	fmt.Println("  14. Check room exists - By Organiser [" + organiserEmail + "]")
+
+	a.menu.AddItem("Enter Text", "Display text from input field", 'I', func() {
+		a.app.SetFocus(a.inputField)
+	})
+	a.menu.AddItem("Help", "Show the help text", 'h', a.handleHelp)
+
+	a.menu.AddItem("Quit", "Exit the application", 'q', func() {
+		a.app.Stop()
+	})
+	
+	// Create output panel (right panel)
+	a.output = tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetChangedFunc(func() {
+			a.app.Draw()
+		})
+	a.output.SetBorder(true).SetTitle("Output")
+
+	// Add initial help text
+	fmt.Fprintf(a.output, `[yellow]Navigation Help:[white]
+• Press [green]ESC[white] to switch focus between menu and output
+• Use [green]PgUp[white]/[green]PgDn[white] to scroll when output has focus
+• Use mouse wheel to scroll (if your terminal supports it)
+• Use arrow keys [green]↑[white]/[green]↓[white] to scroll line by line
+`)
+
+	// Create webhook output panel (bottom)
+	a.webhookOutput = tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetChangedFunc(func() {
+			a.app.Draw()
+		})
+	a.webhookOutput.SetBorder(true).SetTitle("Webhook Events")
+
+	// Add initial notification URL
+	notificationURL := a.graphHelper.GetNotificationUrl()
+	fmt.Fprintf(a.webhookOutput, "[yellow]Webhook Endpoint:[white] %s\n", notificationURL)
+	fmt.Fprintf(a.webhookOutput, "[yellow]Listening for events...[white]\n")
+
+	// Create input field
+	a.inputField = tview.NewInputField().
+		SetLabel("Input: ").
+		SetFieldWidth(30).
+		SetDoneFunc(func(key tcell.Key) {
+			if key == tcell.KeyEnter {
+				inputText := a.inputField.GetText()
+				a.handleInput(inputText)
+				a.inputField.SetText("")
+			}
+		})
+
+	// Create layout
+	topPanels := tview.NewFlex().
+		AddItem(a.menu, 30, 1, true).
+		AddItem(a.output, 0, 2, false)
+
+	a.layout = tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(topPanels, 0, 2, true).
+		AddItem(a.webhookOutput, 10, 1, false).
+		AddItem(a.inputField, 1, 1, true) // Add input field at the bottom
+
+	// Set up key bindings
+	a.layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEsc {
+			// Switch focus between panels
+			if a.menu.HasFocus() {
+				a.app.SetFocus(a.output)
+			} else {
+				a.app.SetFocus(a.menu)
+			}
+		}
+		return event
+	})
+
+	a.output.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		row, _ := a.output.GetScrollOffset()
+		switch event.Key() {
+		case tcell.KeyPgDn:
+			a.output.ScrollTo(row+10, 0)
+		case tcell.KeyPgUp:
+			a.output.ScrollTo(row-10, 0)
+		}
+		return event
+	})
+
+	a.webhookOutput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		row, _ := a.webhookOutput.GetScrollOffset()
+		switch event.Key() {
+		case tcell.KeyPgDn:
+			a.webhookOutput.ScrollTo(row+10, 0)
+		case tcell.KeyPgUp:
+			a.webhookOutput.ScrollTo(row-10, 0)
+		}
+		return event
+	})
+
+	a.app.SetRoot(a.layout, true)
+}
+
+// Example menu handler functions
+func (a *App) handleAccessToken() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.output.Clear()
+	fmt.Fprintf(a.output, "Displaying the access token...\n")
+
+	a.graphHelper.DisplayAccessTokenA(a.output)
+}
+
+func (a *App) handleListRoomBookings(emailAddress string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.output.Clear()
+	fmt.Fprintf(a.output, "Listing room bookings for [yellow]%s[white]...\n", emailAddress)
+
+	a.graphHelper.ListRoom7DaysBookings(a.output, emailAddress)
+
+}
+
+func (a *App) appendToWebhookOutput(text string) {
+	a.app.QueueUpdateDraw(func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+
+		fmt.Fprintf(a.webhookOutput, "%s", text)
+		// Get the number of lines in the buffer
+		_, _, _, height := a.webhookOutput.GetInnerRect()
+		count := len(a.webhookOutput.GetText(true)) - height
+		if count > 0 {
+			// Scroll to bottom
+			a.webhookOutput.ScrollTo(count, 0)
+		}
+	})
+}
+
+func (a *App) handleInput(input string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.output.Clear()
+	fmt.Fprintf(a.output, "[yellow]You entered:[white]\n%s\n", input)
+	a.app.SetFocus(a.menu) // Return focus to menu after input
+}
 
 func main() {
 	fmt.Println("Go MS Graph App-Only Simple CLI Tool")
@@ -24,102 +317,137 @@ func main() {
 
 	// Set up app auth
 	graphHelper := graphhelper.NewGraphHelper()
-
 	initializeGraph(graphHelper)
 
-	// Start up a simple the webserver for the subscription messages on the port in the .env file.
-	go func() {
-		port := graphHelper.GetPort()
-		http.HandleFunc("/webhook", handleGraphSubscription)
-		log.Println("Server starting... [port: " + port + "]")
-		if err := http.ListenAndServe(port, nil); err != nil {
-			log.Fatalf("Server error: %v", err)
-		}
-	}()
+	// Create the application
+	app := NewApp(graphHelper)
 
-	// get the organiser and room email from the environment.
 	organiserEmail := graphHelper.GetOrganiserEmail()
 	if organiserEmail == "" {
 		fmt.Println("No organiser found")
 	}
+	app.organiserEmail = organiserEmail
 
 	roomEmail := graphHelper.GetRoomEmail()
 	if roomEmail == "" {
 		fmt.Println("No room email found")
 	}
+	app.roomEmail = roomEmail
 
-	var choice int64 = -1
-
-	for {
-		fmt.Printf("\n\nPlease choose one of the following options:\n")
-		fmt.Println("  0.  Exit")
-		fmt.Println("  1.  Display access token")
-		fmt.Println("  +-----------------------------------+")
-		fmt.Println("  2.  List All Users")
-		fmt.Println("  3.  List All Subscriptions")
-		fmt.Println("  4.  List All Rooms")
-		fmt.Println("  5.  List 7 days of Events - By Room [" + roomEmail + "]")
-		fmt.Println("  6.  List 7 days of Events - By Organiser [" + organiserEmail + "]")
-		fmt.Println("  +-----------------------------------+")
-		fmt.Println("  7.  Create a 1 day subscription - By Room [" + roomEmail + "]")
-		fmt.Println("  8.  Delete a subscription by the subscription id")
-		fmt.Println("  +-----------------------------------+")
-		fmt.Println("  9.  Delete event id - By Room [" + roomEmail + "]")
-		fmt.Println("  10. Delete event id - By Organiser [" + organiserEmail + "]")
-		fmt.Println("  +-----------------------------------+")
-		fmt.Println("  11. Create Event at 10 to 10:30 tomorrow - By Organiser [" + organiserEmail + "]")
-		fmt.Print(":> ")
-
-		_, err = fmt.Scanf("%d", &choice)
-		if err != nil {
-			choice = -1
+	// Start webhook server in a goroutine
+	go func() {
+		port := graphHelper.GetPort()
+		http.HandleFunc("/webhook", app.handleWebhook)
+		log.Printf("Server starting on port %s...\n", port)
+		if err := http.ListenAndServe(port, nil); err != nil {
+			log.Fatalf("Server error: %v", err)
 		}
+	}()
 
-		switch choice {
-		case 0:
-			// Exit the program
-			fmt.Println("Goodbye...")
-		case 1:
-			// Display access token
-			displayAccessToken(graphHelper)
-		case 2:
-			// List users
-			listUsers(graphHelper)
-		case 3:
-			// List Subscriptions
-			listSubscriptions(graphHelper)
-		case 4:
-			// list rooms
-			listRooms(graphHelper)
-		case 5:
-			// list rooms
-			listRoomBookingsAsRoom(graphHelper)
-		case 6:
-			// list rooms
-			listRoomBookingsAsOrganiser(graphHelper)
-		case 7:
-			// create 1 day subscription
-			createOneDaySubscription(graphHelper)
-		case 8:
-			// delete subscription by subscription id asked for as input
-			deleteSubscription(graphHelper)
-		case 9:
-			// delete event by event id for the specified room//
-			deleteEventByRoom(graphHelper)
-		case 10:
-			// delete event by event id for the specified organiser
-			deleteEventByOrganiser(graphHelper)
-		case 11:
-			// delete event by event id for the specified organiser
-			createEventByOrganiser(graphHelper)
-		default:
-			fmt.Println("Invalid choice! Please try again.")
-		}
-
-		if choice == 0 {
-			break
-		}
+	// Run the application
+	if err := app.app.Run(); err != nil {
+		log.Fatal(err)
 	}
+
+	/*
+		// get the organiser and room email from the environment.
+		organiserEmail := graphHelper.GetOrganiserEmail()
+		if organiserEmail == "" {
+			fmt.Println("No organiser found")
+		}
+
+		roomEmail := graphHelper.GetRoomEmail()
+		if roomEmail == "" {
+			fmt.Println("No room email found")
+		}
+
+		var choice int64 = -1
+
+		for {
+			fmt.Printf("\n\nPlease choose one of the following options:\n")
+			fmt.Println("  0.  Exit")
+			fmt.Println("  1.  Display access token")
+			fmt.Println("  +-----------------------------------+")
+			fmt.Println("  2.  List All Users")
+			fmt.Println("  3.  List All Subscriptions")
+			fmt.Println("  4.  List All Rooms")
+			fmt.Println("  +-----------------------------------+")
+			fmt.Println("  5.  List 7 days of Events - By Room [" + roomEmail + "]")
+			fmt.Println("  6.  List 7 days of Events - By Organiser [" + organiserEmail + "]")
+			fmt.Println("  +-----------------------------------+")
+			fmt.Println("  7.  Create a 1 day subscription - By Room [" + roomEmail + "]")
+			fmt.Println("  8.  Delete a subscription by the subscription id")
+			fmt.Println("  +-----------------------------------+")
+			fmt.Println("  9.  Delete event id - By Room [" + roomEmail + "]")
+			fmt.Println("  10. Delete event id - By Organiser [" + organiserEmail + "]")
+			fmt.Println("  +-----------------------------------+")
+			fmt.Println("  11. Create Event at 10 to 10:30 tomorrow - By Room [" + roomEmail + "]")
+			fmt.Println("  12. Create Event at 10 to 10:30 tomorrow - By Organiser [" + organiserEmail + "]")
+			fmt.Println("  +-----------------------------------+")
+			fmt.Println("  13. Check room exists - By Room [" + roomEmail + "]")
+			fmt.Println("  14. Check room exists - By Organiser [" + organiserEmail + "]")
+			fmt.Print(":> ")
+
+			_, err = fmt.Scanf("%d", &choice)
+			if err != nil {
+				choice = -1
+			}
+
+			switch choice {
+			case 0:
+				// Exit the program
+				fmt.Println("Goodbye...")
+			case 1:
+				// Display access token
+				displayAccessToken(graphHelper)
+			case 2:
+				// List users
+				listUsers(graphHelper)
+			case 3:
+				// List Subscriptions
+				listSubscriptions(graphHelper)
+			case 4:
+				// list rooms
+				listRooms(graphHelper)
+			case 5:
+				// list rooms
+				listRoomBookingsAsRoom(graphHelper)
+			case 6:
+				// list rooms
+				listRoomBookingsAsOrganiser(graphHelper)
+			case 7:
+				// create 1 day subscription
+				createOneDaySubscription(graphHelper)
+			case 8:
+				// delete subscription by subscription id asked for as input
+				deleteSubscription(graphHelper)
+			case 9:
+				// delete event by event id for the specified room//
+				deleteEventByRoom(graphHelper)
+			case 10:
+				// delete event by event id for the specified organiser
+				deleteEventByOrganiser(graphHelper)
+			case 12:
+				// delete event by event id for the specified organiser
+				createEventByOrganiser(graphHelper)
+			case 11:
+				// delete event by event id for the specified organiser
+				createEventByRoom(graphHelper)
+			case 13:
+				// check room exists
+				validateRoomByRoom(graphHelper)
+			case 14:
+				// check room exists  by organiser, should be false all the time.
+				validateRoomByOrganiser(graphHelper)
+			default:
+				fmt.Println("Invalid choice! Please try again.")
+			}
+
+			if choice == 0 {
+				break
+			}
+		}
+	*/
 }
 
 func initializeGraph(graphHelper *graphhelper.GraphHelper) {
@@ -167,40 +495,9 @@ func listUsers(graphHelper *graphhelper.GraphHelper) {
 	fmt.Println()
 }
 
-func listSubscriptions(graphHelper *graphhelper.GraphHelper) {
-
-	subscriptions, err := graphHelper.ListSubscriptions()
-	if err != nil {
-		log.Panicf("Error making Graph call: %v", err)
-	}
-
-	// check for nil size on the subscriptions
-	if subscriptions == nil {
-		fmt.Println("No subscriptions found")
-		return
-	}
-
-	for _, subscription := range subscriptions.GetValue() {
-		fmt.Printf("SubscriptionId: %s\n", *subscription.GetId())
-		fmt.Printf("  ChangeType: %s\n", *subscription.GetChangeType())
-		fmt.Printf("  ExpirationDateTime: %s\n", subscription.GetExpirationDateTime().String())
-		fmt.Printf("  Resource: %s\n", *subscription.GetResource())
-		fmt.Printf("  ApplicationId: %s\n", *subscription.GetApplicationId())
-		// print the additional data
-		fmt.Printf("  Additional Data length: %v\n", len(subscription.GetAdditionalData()))
-		//fmt.Printf("  LifecycleNotificationURL: %v\n", *subscription.GetLifecycleNotificationUrl())
-		//fmt.Printf("  ClientState: %s\n", *subscription.GetClientState())
-		fmt.Printf("  CreatorId: %v\n", *subscription.GetCreatorId())
-		fmt.Printf("  NotificationURL: %v\n", *subscription.GetNotificationUrl())
-
-		fmt.Println()
-
-	}
-}
-
 func listRooms(graphHelper *graphhelper.GraphHelper) {
 
-	graphHelper.ListRooms()
+	graphHelper.ListRooms(os.Stdout)
 
 }
 
@@ -212,7 +509,7 @@ func listRoomBookingsAsOrganiser(graphHelper *graphhelper.GraphHelper) {
 		return
 	}
 
-	graphHelper.ListRoom7DaysBookings(organiser)
+	graphHelper.ListRoom7DaysBookings(os.Stdout, organiser)
 
 }
 
@@ -224,11 +521,11 @@ func listRoomBookingsAsRoom(graphHelper *graphhelper.GraphHelper) {
 		return
 	}
 
-	graphHelper.ListRoom7DaysBookings(roomEmail)
+	graphHelper.ListRoom7DaysBookings(os.Stdout, roomEmail)
 
 }
 
-func handleGraphSubscription(w http.ResponseWriter, r *http.Request) {
+/*func handleGraphSubscription(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -253,7 +550,7 @@ func handleGraphSubscription(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received notification: %s", string(body))
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Notification received"))
-}
+}*/
 
 func createOneDaySubscription(graphHelper *graphhelper.GraphHelper) {
 	roomEmail := graphHelper.GetRoomEmail()
@@ -262,7 +559,7 @@ func createOneDaySubscription(graphHelper *graphhelper.GraphHelper) {
 		return
 	}
 
-	values := graphHelper.CreateRoomSubscription(roomEmail)
+	values := graphHelper.CreateRoomSubscription(os.Stdout, roomEmail)
 	println(values)
 }
 
@@ -277,7 +574,7 @@ func deleteSubscription(graphHelper *graphhelper.GraphHelper) {
 		return
 	}
 	// now deleteSubscription
-	err = graphHelper.DeleteSubscription(subscriptionId)
+	err = graphHelper.DeleteSubscription(os.Stdout, subscriptionId)
 	if err != nil {
 		log.Printf("Error deleting subscription: %v", err)
 		return
@@ -299,7 +596,7 @@ func deleteEventByOrganiser(graphHelper *graphhelper.GraphHelper) {
 		log.Printf("Error reading event id: %v", err)
 		return
 	}
-	err = graphHelper.DeleteEvent(organiser, eventId)
+	err = graphHelper.DeleteEvent(os.Stdout, organiser, eventId)
 	if err != nil {
 		log.Printf("Error canceling event: %v", err)
 		return
@@ -321,7 +618,7 @@ func deleteEventByRoom(graphHelper *graphhelper.GraphHelper) {
 		fmt.Println("No room email found")
 		return
 	}
-	err = graphHelper.DeleteEvent(roomEmail, eventId)
+	err = graphHelper.DeleteEvent(os.Stdout, roomEmail, eventId)
 	if err != nil {
 		log.Printf("Error canceling event: %v", err)
 		return
@@ -341,10 +638,67 @@ func createEventByOrganiser(graphHelper *graphhelper.GraphHelper) {
 		return
 	}
 
-	err := graphHelper.CreateEvent(organiser, roomEmail)
+	err := graphHelper.CreateEvent(os.Stdout, organiser, roomEmail)
 	if err != nil {
 		log.Printf("Error creating event: %v", err)
 		return
 	}
 
+}
+
+func createEventByRoom(graphHelper *graphhelper.GraphHelper) {
+
+	roomEmail := graphHelper.GetRoomEmail()
+	if roomEmail == "" {
+		fmt.Println("No room email found")
+		return
+	}
+
+	err := graphHelper.CreateEventAsRoom(os.Stdout, roomEmail)
+	if err != nil {
+		log.Printf("Error creating event: %v", err)
+		return
+	}
+
+}
+
+func validateRoomByOrganiser(graphHelper *graphhelper.GraphHelper) {
+
+	organiser := graphHelper.GetOrganiserEmail()
+	if organiser == "" {
+		fmt.Println("No organiser found")
+		return
+	}
+
+	exists, err := graphHelper.RoomExists2(os.Stdout, organiser)
+	if err != nil {
+		log.Printf("Error checking room: %v", err)
+		return
+	}
+	if exists {
+		fmt.Printf("Room %s exists\n", organiser)
+	} else {
+		fmt.Printf("Room %s does not exist\n", organiser)
+	}
+
+}
+
+func validateRoomByRoom(graphHelper *graphhelper.GraphHelper) {
+
+	roomEmail := graphHelper.GetRoomEmail()
+	if roomEmail == "" {
+		fmt.Println("No room email found")
+		return
+	}
+
+	exists, err := graphHelper.RoomExists2(os.Stdout, roomEmail)
+	if err != nil {
+		log.Printf("Error checking room: %v", err)
+		return
+	}
+	if exists {
+		fmt.Printf("Room %s exists\n", roomEmail)
+	} else {
+		fmt.Printf("Room %s does not exist\n", roomEmail)
+	}
 }
