@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/bovinemagnet/msgraph-cli/graphhelper"
 	"github.com/gdamore/tcell/v2"
@@ -24,16 +28,38 @@ type App struct {
 	mu             sync.Mutex // For thread-safe updates to text views
 	roomEmail      string
 	organiserEmail string
+	webhookChan    chan string
+}
+
+// Create a unified event handler struct
+type EventHandler struct {
+	graphHelper *graphhelper.GraphHelper
+	output      io.Writer
+}
+
+// Consolidate similar event handling functions
+func (h *EventHandler) handleEvent(action string, email string, params ...interface{}) error {
+	switch action {
+	case "create":
+		return h.graphHelper.CreateEvent(context.Background(), h.output, email, params[0].(string))
+	case "delete":
+		return h.graphHelper.DeleteEvent(context.Background(), h.output, email, params[0].(string))
+		// Add other event actions...
+	}
+	return fmt.Errorf("unknown action: %s", action)
 }
 
 func NewApp(graphHelper *graphhelper.GraphHelper) *App {
 	app := &App{
 		app:         tview.NewApplication(),
 		graphHelper: graphHelper,
+		webhookChan: make(chan string, 100),
 	}
 
 	// Initialize UI components
 	app.setupUI()
+
+	go app.processWebhookUpdates()
 	return app
 }
 
@@ -44,7 +70,7 @@ func (a *App) handleCreateOneDaySubscription(email string) {
 	a.output.Clear()
 	fmt.Fprintf(a.output, "Creating a 1 day subscription for [yellow]%s[white]...\n", email)
 
-	a.graphHelper.CreateRoomSubscription(a.output, email)
+	a.graphHelper.CreateRoomSubscription(context.Background(), a.output, email)
 
 }
 
@@ -79,10 +105,10 @@ func (a *App) handleDeleteEvent(email string) {
 				fmt.Fprintf(a.output, "[red]Error: Event ID cannot be empty[white]\n")
 				return
 			} else {
-				fmt.Fprintf(a.output, "[white]Attepting to deleting event [yellow]%s[white] for [yellow]%s[white]...\n", eventId, email)
+				fmt.Fprintf(a.output, "[white]Attempting to deleting event [yellow]%s[white] for [yellow]%s[white]...\n", eventId, email)
 			}
 
-			err := a.graphHelper.DeleteEvent(a.output, email, eventId)
+			err := a.graphHelper.DeleteEvent(context.Background(), a.output, email, eventId)
 			if err != nil {
 				fmt.Fprintf(a.output, "[red]Error deleting event: %v[white]\n", err)
 			}
@@ -108,7 +134,7 @@ func (a *App) handleCreateEvent(email string) {
 	a.output.Clear()
 	fmt.Fprintf(a.output, "Creating an event for [yellow]%s[white]...\n", email)
 
-	a.graphHelper.CreateEvent(a.output, a.organiserEmail, a.roomEmail)
+	a.graphHelper.CreateEvent(context.Background(), a.output, a.organiserEmail, a.roomEmail)
 
 }
 
@@ -163,7 +189,7 @@ func (a *App) setupUI() {
 	a.menu.AddItem("Quit", "Exit the application", 'q', func() {
 		a.app.Stop()
 	})
-	
+
 	// Create output panel (right panel)
 	a.output = tview.NewTextView().
 		SetDynamicColors(true).
@@ -301,6 +327,23 @@ func (a *App) handleInput(input string) {
 	a.output.Clear()
 	fmt.Fprintf(a.output, "[yellow]You entered:[white]\n%s\n", input)
 	a.app.SetFocus(a.menu) // Return focus to menu after input
+}
+
+func (a *App) processWebhookUpdates() {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	var updates []string
+
+	for {
+		select {
+		case update := <-a.webhookChan:
+			updates = append(updates, update)
+		case <-ticker.C:
+			if len(updates) > 0 {
+				a.appendToWebhookOutput(strings.Join(updates, "\n"))
+				updates = updates[:0]
+			}
+		}
+	}
 }
 
 func main() {
@@ -468,7 +511,7 @@ func displayAccessToken(graphHelper *graphhelper.GraphHelper) {
 }
 
 func listUsers(graphHelper *graphhelper.GraphHelper) {
-	users, err := graphHelper.GetUsers()
+	users, err := graphHelper.GetUsers(context.Background())
 	if err != nil {
 		log.Panicf("Error getting users: %v", err)
 	}
@@ -559,7 +602,7 @@ func createOneDaySubscription(graphHelper *graphhelper.GraphHelper) {
 		return
 	}
 
-	values := graphHelper.CreateRoomSubscription(os.Stdout, roomEmail)
+	values := graphHelper.CreateRoomSubscription(context.Background(), os.Stdout, roomEmail)
 	println(values)
 }
 
@@ -596,7 +639,7 @@ func deleteEventByOrganiser(graphHelper *graphhelper.GraphHelper) {
 		log.Printf("Error reading event id: %v", err)
 		return
 	}
-	err = graphHelper.DeleteEvent(os.Stdout, organiser, eventId)
+	err = graphHelper.DeleteEvent(context.Background(), os.Stdout, organiser, eventId)
 	if err != nil {
 		log.Printf("Error canceling event: %v", err)
 		return
@@ -618,7 +661,7 @@ func deleteEventByRoom(graphHelper *graphhelper.GraphHelper) {
 		fmt.Println("No room email found")
 		return
 	}
-	err = graphHelper.DeleteEvent(os.Stdout, roomEmail, eventId)
+	err = graphHelper.DeleteEvent(context.Background(), os.Stdout, roomEmail, eventId)
 	if err != nil {
 		log.Printf("Error canceling event: %v", err)
 		return
@@ -638,7 +681,7 @@ func createEventByOrganiser(graphHelper *graphhelper.GraphHelper) {
 		return
 	}
 
-	err := graphHelper.CreateEvent(os.Stdout, organiser, roomEmail)
+	err := graphHelper.CreateEvent(context.Background(), os.Stdout, organiser, roomEmail)
 	if err != nil {
 		log.Printf("Error creating event: %v", err)
 		return
@@ -701,4 +744,16 @@ func validateRoomByRoom(graphHelper *graphhelper.GraphHelper) {
 	} else {
 		fmt.Printf("Room %s does not exist\n", roomEmail)
 	}
+}
+
+// Batch UI updates
+func (a *App) updateOutput(updates ...string) {
+	a.app.QueueUpdateDraw(func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+
+		for _, update := range updates {
+			fmt.Fprintf(a.output, "%s", update)
+		}
+	})
 }

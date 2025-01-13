@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -15,16 +16,42 @@ import (
 	msgraphsdk "github.com/microsoftgraph/msgraph-sdk-go"
 	graphmodels "github.com/microsoftgraph/msgraph-sdk-go/models"
 	graphusers "github.com/microsoftgraph/msgraph-sdk-go/users"
+	"golang.org/x/time/rate"
 )
 
 type GraphHelper struct {
 	clientSecretCredential *azidentity.ClientSecretCredential
 	appClient              *msgraphsdk.GraphServiceClient
+	cache                  struct {
+		rooms      map[string]graphmodels.Roomable
+		users      map[string]graphmodels.Userable
+		lastUpdate time.Time
+		mu         sync.RWMutex
+	}
+	clientPool  sync.Pool
+	rateLimiter *rate.Limiter
 }
 
 func NewGraphHelper() *GraphHelper {
-	g := &GraphHelper{}
+	g := &GraphHelper{
+		clientPool: sync.Pool{
+			New: func() interface{} {
+				// Create new client
+				client := msgraphsdk.NewGraphServiceClient(nil) // ... initialize new client
+				return client
+			},
+		},
+		rateLimiter: rate.NewLimiter(rate.Every(time.Second/10), 10), // 10 requests per second
+	}
 	return g
+}
+
+func (g *GraphHelper) getClient() *msgraphsdk.GraphServiceClient {
+	return g.clientPool.Get().(*msgraphsdk.GraphServiceClient)
+}
+
+func (g *GraphHelper) putClient(client *msgraphsdk.GraphServiceClient) {
+	g.clientPool.Put(client)
 }
 
 // GetPort retrieves the port number from the environment variable "PORT".
@@ -133,7 +160,7 @@ func (g *GraphHelper) GetAppToken() (*string, error) {
 	return &token.Token, nil
 }
 
-func (g *GraphHelper) GetUsers() (graphmodels.UserCollectionResponseable, error) {
+func (g *GraphHelper) GetUsers(ctx context.Context) (graphmodels.UserCollectionResponseable, error) {
 	var topValue int32 = 25
 	query := graphusers.UsersRequestBuilderGetQueryParameters{
 		// Only request specific properties
@@ -145,29 +172,31 @@ func (g *GraphHelper) GetUsers() (graphmodels.UserCollectionResponseable, error)
 	}
 
 	return g.appClient.Users().
-		Get(context.Background(),
+		Get(ctx,
 			&graphusers.UsersRequestBuilderGetRequestConfiguration{
 				QueryParameters: &query,
 			})
 }
 
 func (g *GraphHelper) ListUsers(w io.Writer) {
-	users, err := g.GetUsers()
+	users, err := g.GetUsers(context.Background())
 	if err != nil {
 		log.Panicf("Error getting users: %v", err)
 	}
 
 	// Output each user's details
 	for _, user := range users.GetValue() {
-		fmt.Fprintf(w, "User: %s\n", *user.GetDisplayName())
-		fmt.Fprintf(w, "  ID: %s\n", *user.GetId())
-
+		fmt.Fprintf(w, "[yellow]User Id: [green]%s[white]\n", *user.GetId())
+		fmt.Fprintf(w, "  Name: %s\n", *user.GetDisplayName())
 		noEmail := "NO EMAIL"
 		email := user.GetMail()
 		if email == nil {
 			email = &noEmail
 		}
 		fmt.Fprintf(w, "  Email: %s\n", *email)
+		fmt.Fprintf(w, "  Enabled: %v\n", user.GetAccountEnabled())
+		fmt.Fprintf(w, "  IsResourceAccount: %v\n", user.GetIsResourceAccount())
+		fmt.Fprintf(w, "\n")
 	}
 
 	// If GetOdataNextLink does not return nil,
@@ -179,7 +208,14 @@ func (g *GraphHelper) ListUsers(w io.Writer) {
 	fmt.Fprintf(w, "\n")
 }
 
-func (g *GraphHelper) ListSubscriptions() (graphmodels.SubscriptionCollectionResponseable, error) {
+func (g *GraphHelper) ListSubscriptions(ctx context.Context) (graphmodels.SubscriptionCollectionResponseable, error) {
+
+	return g.appClient.Subscriptions().
+		Get(ctx, nil)
+
+}
+
+func (g *GraphHelper) ListSubscriptionsByEmail(email string) (graphmodels.SubscriptionCollectionResponseable, error) {
 
 	return g.appClient.Subscriptions().
 		Get(context.Background(), nil)
@@ -201,10 +237,10 @@ func (g *GraphHelper) ListRooms(w io.Writer) {
 	}
 
 	for _, room := range rooms.GetValue() {
-		fmt.Fprintf(w, "Room ID: %s\n", *room.GetId())
+		fmt.Fprintf(w, "[yellow]Room ID: [green]%s[white]\n", *room.GetId())
 		fmt.Fprintf(w, "  Name: %s\n", *room.GetDisplayName())
 		fmt.Fprintf(w, "  Capacity: %d\n", *room.GetCapacity())
-		fmt.Fprintf(w, "  Email: %s\n", *room.GetEmailAddress())
+		fmt.Fprintf(w, "  Email: %s\n\n", *room.GetEmailAddress())
 	}
 
 	return
@@ -295,7 +331,7 @@ func ConvertToLocalTime(timeString string) (time.Time, error) {
 }
 
 // Function to create a Microsoft Graph subscription for room events
-func (g *GraphHelper) CreateRoomSubscription(w io.Writer, roomID string) error {
+func (g *GraphHelper) CreateRoomSubscription(ctx context.Context, w io.Writer, roomID string) error {
 
 	// Define subscription parameters
 	subscription := graphmodels.NewSubscription()
@@ -328,7 +364,7 @@ func (g *GraphHelper) CreateRoomSubscription(w io.Writer, roomID string) error {
 	//	subscription.SetLatestSupportedTlsVersion(&latestSupportedTlsVersion)
 
 	// Create the subscription
-	result, err := g.appClient.Subscriptions().Post(context.Background(), subscription, nil)
+	result, err := g.appClient.Subscriptions().Post(ctx, subscription, nil)
 	if err != nil {
 		fmt.Fprintf(w, "failed to create subscription: %v", err.Error())
 		return fmt.Errorf("failed to create subscription: %v", err)
@@ -364,13 +400,13 @@ func (g *GraphHelper) DeleteSubscription(w io.Writer, subscriptionId string) err
 //
 // Returns:
 //   - error: An error object if the deletion fails, otherwise nil.
-func (g *GraphHelper) DeleteEvent(w io.Writer, userId string, eventId string) error {
+func (g *GraphHelper) DeleteEvent(ctx context.Context, w io.Writer, userId string, eventId string) error {
 
 	requestBody := graphusers.NewItemEventsItemCancelPostRequestBody()
 	comment := "System Canceled Event"
 	requestBody.SetComment(&comment) // Initialize a new Graph client
 
-	err := g.appClient.Users().ByUserId(userId).Events().ByEventId(eventId).Delete(context.Background(), nil)
+	err := g.appClient.Users().ByUserId(userId).Events().ByEventId(eventId).Delete(ctx, nil)
 	if err != nil {
 		fmt.Fprintf(w, "[red]failed to delete event:[%v] error:[%v][white] for [yellow]%s[white]\n", eventId, err.Error(), userId)
 		return fmt.Errorf("failed to delete event: %v", err)
@@ -378,9 +414,23 @@ func (g *GraphHelper) DeleteEvent(w io.Writer, userId string, eventId string) er
 	return nil
 }
 
-func (g *GraphHelper) CreateEvent(w io.Writer, organiserEmail string, roomEmail string) error {
+// Create custom error types
+type GraphError struct {
+	Operation string
+	Err       error
+}
 
-	// Create an event for tomorrow at 10:00 AM for userId and set the room/location as roomId
+func (e *GraphError) Error() string {
+	return fmt.Sprintf("graph operation '%s' failed: %v", e.Operation, e.Err)
+}
+
+func (g *GraphHelper) CreateEvent(ctx context.Context, w io.Writer, organiserEmail string, roomEmail string) error { // Create an event for tomorrow at 10:00 AM for userId and set the room/location as roomId
+	// Add timeout if not set
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
 
 	startTime, endTime := GetTomorrowTimes()
 	fmt.Fprintln(w, "Tomorrow at 10:00 AM:", startTime.String())
@@ -427,25 +477,6 @@ func (g *GraphHelper) CreateEvent(w io.Writer, organiserEmail string, roomEmail 
 	orgType := graphmodels.REQUIRED_ATTENDEETYPE
 	organiser.SetTypeEscaped(&orgType)
 
-	/*	attendee := graphmodels.NewAttendee()
-		emailAddress := graphmodels.NewEmailAddress()
-		address := "DanaS@contoso.com"
-		emailAddress.SetAddress(&address)
-		name := "Dana Swope"
-		emailAddress.SetName(&name)
-		attendee.SetEmailAddress(emailAddress)
-		type1 := graphmodels.REQUIRED_ATTENDEETYPE
-		attendee.SetType(&type1)
-		attendee1 := graphmodels.NewAttendee()
-		emailAddress := graphmodels.NewEmailAddress()
-		address := "AlexW@contoso.com"
-		emailAddress.SetAddress(&address)
-		name := "Alex Wilber"
-		emailAddress.SetName(&name)
-		attendee1.SetEmailAddress(emailAddress)
-		type2 := graphmodels.REQUIRED_ATTENDEETYPE
-		attendee1.SetType(&type2) */
-
 	roomAttendee := graphmodels.NewAttendee()
 	roomEmailAddress := graphmodels.NewEmailAddress()
 	roomEmailAddress.SetAddress(&roomEmail)
@@ -453,21 +484,17 @@ func (g *GraphHelper) CreateEvent(w io.Writer, organiserEmail string, roomEmail 
 	roomAttendee.SetTypeEscaped(&roomResourceType)
 	roomAttendee.SetEmailAddress(roomEmailAddress)
 	attendees := []graphmodels.Attendeeable{
-		//organiser,
+		// organiser,
 		roomAttendee,
 	}
 	requestBody.SetAttendees(attendees)
 
 	location := graphmodels.NewLocation()
-	//locationType := graphmodels.DEFAULT_LOCATIONTYPE
-	//location.SetLocationType(&locationType)
 	location.SetLocationEmailAddress(&roomEmail)
-	//displayName := "10.10.10"
-	//location.SetDisplayName(&displayName)
 	requestBody.SetLocation(location)
 
 	//locations := []graphmodels.Locationable{
-	//	location,
+	//      location,
 	//}
 	//requestBody.SetLocations(locations)
 
@@ -475,8 +502,77 @@ func (g *GraphHelper) CreateEvent(w io.Writer, organiserEmail string, roomEmail 
 	requestBody.SetAllowNewTimeProposals(&allowNewTimeProposals)
 
 	// To initialize your graphClient, see https://learn.microsoft.com/en-us/graph/sdks/create-client?from=snippets&tabs=go
-	createdEvent, err := g.appClient.Users().ByUserId(organiserEmail).Events().Post(context.Background(), requestBody, configuration)
-	//g.appClient.Users().ByUserId(organiserEmail).Calendar().Events().Post(context.Background(), requestBody, configuration)
+	//createdEvent, err := g.appClient.Users().ByUserId(organiserEmail).Events().Post(context.Background(), requestBody, configuration)
+
+	// Use context in API calls
+	createdEvent, err := g.appClient.Users().
+		ByUserId(organiserEmail).
+		Events().
+		Post(ctx, requestBody, configuration)
+	if err != nil {
+		fmt.Fprintln(w, "Failed to create event:", err)
+		return err
+	}
+	// g.appClient.Users().ByUserId(organiserEmail).Calendar().Events().Post(context.Background(), requestBody, configuration)
+	if err != nil {
+		fmt.Fprintln(w, "Failed to create event:", err)
+		return err
+	}
+
+	fmt.Fprintf(w, "[yellow]Event Id : [green]%s[white]\n", *createdEvent.GetId())
+	fmt.Fprintf(w, "  Subject: %s\n", *createdEvent.GetSubject())
+	fmt.Fprintf(w, "  Start: %s, End: %s\n",
+		*createdEvent.GetStart().GetDateTime(),
+		*createdEvent.GetEnd().GetDateTime())
+	// Print start and end in local time
+
+	localStart, err := ConvertToLocalTime(*createdEvent.GetStart().GetDateTime())
+	if err != nil {
+		fmt.Fprintln(w, "Failed to convert start time to local:", err)
+
+	} else {
+		fmt.Fprintf(w, "  Local Start: %v\n", localStart)
+	}
+	localEnd, err := ConvertToLocalTime(*createdEvent.GetEnd().GetDateTime())
+	if err != nil {
+		fmt.Fprintln(w, "Failed to convert end time to local:", err)
+
+	} else {
+		fmt.Fprintf(w, "  Local End: %v\n", localEnd)
+	}
+	fmt.Fprintf(w, "  OnlineMeeting: %t\n", *createdEvent.GetIsOnlineMeeting())
+	if createdEvent.GetIsOrganizer() == nil || *createdEvent.GetIsOrganizer() == false {
+		fmt.Fprintf(w, "  isOrganiser: [red]%t[white]\n", *createdEvent.GetIsOrganizer())
+	} else {
+		fmt.Fprintf(w, "  isOrganiser: [green]%t[white]\n", *createdEvent.GetIsOrganizer())
+	}
+	fmt.Fprintf(w, "  isCancelled: %t\n", *createdEvent.GetIsCancelled())
+	fmt.Fprintf(w, "  Organiser: [yellow]%v[white]\n", *createdEvent.GetOrganizer().GetEmailAddress().GetAddress())
+	return nil
+}
+
+// Use structured error handling
+func (g *GraphHelper) CreateEventz(ctx context.Context, w io.Writer, organiserEmail, roomEmail string) error {
+	// Add timeout if not set
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+	headers := abstractions.NewRequestHeaders()
+	headers.Add("Prefer", "outlook.timezone=\"Pacific Standard Time\"")
+
+	configuration := &graphusers.ItemEventsRequestBuilderPostRequestConfiguration{
+		Headers: headers,
+	}
+
+	requestBody := graphmodels.NewEvent()
+
+	// Use context in API calls
+	createdEvent, err := g.appClient.Users().
+		ByUserId(organiserEmail).
+		Events().
+		Post(ctx, requestBody, configuration)
 	if err != nil {
 		fmt.Fprintln(w, "Failed to create event:", err)
 		return err
@@ -676,4 +772,56 @@ func (g *GraphHelper) RoomExists2(w io.Writer, roomEmail string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+func (g *GraphHelper) GetRoom(email string) (graphmodels.Roomable, error) {
+	g.cache.mu.RLock()
+	if room, ok := g.cache.rooms[email]; ok && time.Since(g.cache.lastUpdate) < 5*time.Minute {
+		g.cache.mu.RUnlock()
+		return room, nil
+	}
+	g.cache.mu.RUnlock()
+
+	// Fetch and cache room
+	g.cache.mu.Lock()
+	defer g.cache.mu.Unlock()
+
+	// 3. Build the query parameter object for /places?$filter=emailAddress eq '<room>'
+	//filterString := fmt.Sprintf("emailAddress eq '%s'", email)
+	//queryParams := &graphmodels.PlaceRequestBuilderGetQueryParameters{
+	//	Filter: &filterString,
+	//	}
+
+	// 4. Build the request configuration with the query params
+	//	requestConfig := g.appClient.PlacesRequestBuilderGetRequestConfiguration{
+	//		QueryParameters: queryParams,
+	//	}
+
+	// 5. Call the .Get(...) method to retrieve the place(s)
+	//	ctx := context.Background()
+	// Fetch room from API
+	//	room, err := g.appClient.Places().Get(ctx, requestConfig)
+
+	// Fetch room from API
+	//	room, err := g.appClient.Places().GraphRoom().ByPlaceId(email).Get(context.Background(), nil)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+
+	// Initialize cache map if nil
+	//	if g.cache.rooms == nil {
+	//		g.cache.rooms = make(map[string]graphmodels.Roomable)
+	//	}
+
+	//	g.cache.rooms[email] = room
+	//	g.cache.lastUpdate = time.Now()
+	//	return room, nil
+	return nil, nil
+}
+
+func (g *GraphHelper) makeRequest(ctx context.Context, fn func() error) error {
+	if err := g.rateLimiter.Wait(ctx); err != nil {
+		return err
+	}
+	return fn()
 }

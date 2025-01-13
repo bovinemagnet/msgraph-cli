@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/bovinemagnet/msgraph-cli/graphhelper"
 )
@@ -14,38 +16,41 @@ func (a *App) HandleListSubscriptions() {
 	a.output.Clear()
 	fmt.Fprintf(a.output, "Listing subscriptions...\n")
 
-	subscriptions, err := a.graphHelper.ListSubscriptions()
+	subscriptions, err := a.graphHelper.ListSubscriptions(context.Background())
 	if err != nil {
 		fmt.Fprintf(a.output, "[red]Error making Graph call: %v[white]\n", err)
 		return
 	}
 
 	if subscriptions == nil {
-		fmt.Fprintf(a.output, "No subscriptions found\n")
+		fmt.Fprintf(a.output, "[yellow]No subscriptions found (response was nil)[white]\n")
 		return
 	}
 
-	if len(subscriptions.GetValue()) == 0 {
-		fmt.Fprintf(a.output, "No subscriptions found\n")
+	values := subscriptions.GetValue()
+	if values == nil {
+		fmt.Fprintf(a.output, "[yellow]No subscription values found (GetValue() returned nil)[white]\n")
 		return
 	}
 
-	for _, subscription := range subscriptions.GetValue() {
-		fmt.Fprintf(a.output, "[yellow]SubscriptionId:[white] %s\n", *subscription.GetId())
+	if len(values) == 0 {
+		fmt.Fprintf(a.output, "[yellow]No active subscriptions found[white]\n")
+		return
+	}
+
+	fmt.Fprintf(a.output, "[green]Found %d subscription(s):[white]\n", len(values))
+	for _, subscription := range values {
+		fmt.Fprintf(a.output, "\n[yellow]SubscriptionId: [green]%s[white]\n", *subscription.GetId())
 		fmt.Fprintf(a.output, "  ChangeType: %s\n", *subscription.GetChangeType())
-		fmt.Fprintf(a.output, "  ExpirationDateTime: %s\n", subscription.GetExpirationDateTime().String())
+		fmt.Fprintf(a.output, "  ExpirationDateTime: %s\n", subscription.GetExpirationDateTime().Format(time.RFC3339))
 		fmt.Fprintf(a.output, "  Resource: %s\n", *subscription.GetResource())
-		fmt.Fprintf(a.output, "  ApplicationId: %s\n", *subscription.GetApplicationId())
-		fmt.Fprintf(a.output, "  Additional Data length: %v\n", len(subscription.GetAdditionalData()))
-		fmt.Fprintf(a.output, "  CreatorId: %v\n", *subscription.GetCreatorId())
-		fmt.Fprintf(a.output, "  NotificationURL: %v\n\n", *subscription.GetNotificationUrl())
+		fmt.Fprintf(a.output, "  NotificationURL: %s\n", *subscription.GetNotificationUrl())
 	}
-
 }
 
 func listSubscriptions(graphHelper *graphhelper.GraphHelper) {
 
-	subscriptions, err := graphHelper.ListSubscriptions()
+	subscriptions, err := graphHelper.ListSubscriptions(context.Background())
 	if err != nil {
 		log.Panicf("Error making Graph call: %v", err)
 	}

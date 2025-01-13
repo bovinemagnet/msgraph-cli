@@ -11,6 +11,7 @@ require (
 	github.com/microsoft/kiota-authentication-azure-go v1.1.0
 	github.com/microsoftgraph/msgraph-sdk-go v1.57.0
 	github.com/rivo/tview v0.0.0-20241227133733-17b7edb88c57
+	golang.org/x/time v0.9.0
 )
 
 require (
