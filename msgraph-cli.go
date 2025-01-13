@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -25,6 +24,7 @@ type App struct {
 	graphHelper    *graphhelper.GraphHelper
 	layout         *tview.Flex
 	inputField     *tview.InputField
+	footer         *tview.TextView
 	mu             sync.Mutex // For thread-safe updates to text views
 	roomEmail      string
 	organiserEmail string
@@ -49,6 +49,28 @@ func (h *EventHandler) handleEvent(action string, email string, params ...interf
 	return fmt.Errorf("unknown action: %s", action)
 }
 
+func (a *App) setupKeyboardShortcuts() {
+	a.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyF5:
+			// Refresh the left menu
+			a.refreshLeftMenu()
+			return nil
+		}
+		return event
+	})
+}
+
+func (a *App) refreshLeftMenu() {
+	// Clear existing items
+	a.menu.Clear()
+
+	//a.handleEnv()
+
+	// Force refresh of the display
+	a.app.Draw()
+}
+
 func NewApp(graphHelper *graphhelper.GraphHelper) *App {
 	app := &App{
 		app:         tview.NewApplication(),
@@ -60,6 +82,10 @@ func NewApp(graphHelper *graphhelper.GraphHelper) *App {
 	app.setupUI()
 
 	go app.processWebhookUpdates()
+
+	// Add keyboard shortcuts
+	//app.setupKeyboardShortcuts()
+
 	return app
 }
 
@@ -190,6 +216,10 @@ func (a *App) setupUI() {
 		a.app.Stop()
 	})
 
+	// Add help text to the footer
+	//helpText := " F5: Refresh Rooms | Q: Quit "
+	//a.footer.SetText(helpText).SetTextAlign(tview.AlignCenter)
+
 	// Create output panel (right panel)
 	a.output = tview.NewTextView().
 		SetDynamicColors(true).
@@ -232,6 +262,12 @@ func (a *App) setupUI() {
 				a.inputField.SetText("")
 			}
 		})
+
+	// Setup footer
+	a.footer = tview.NewTextView().
+		SetTextAlign(tview.AlignRight).
+		SetDynamicColors(true).
+		SetText(" F5: Refresh Rooms | Q: Quit ")
 
 	// Create layout
 	topPanels := tview.NewFlex().
@@ -378,12 +414,10 @@ func main() {
 	app.roomEmail = roomEmail
 
 	// Start webhook server in a goroutine
+	webhookServer := NewWebhookServer(app)
 	go func() {
-		port := graphHelper.GetPort()
-		http.HandleFunc("/webhook", app.handleWebhook)
-		log.Printf("Server starting on port %s...\n", port)
-		if err := http.ListenAndServe(port, nil); err != nil {
-			log.Fatalf("Server error: %v", err)
+		if err := webhookServer.Start(); err != nil {
+			log.Fatalf("Webhook server error: %v", err)
 		}
 	}()
 
