@@ -29,6 +29,8 @@ type App struct {
 	roomEmail      string
 	organiserEmail string
 	webhookChan    chan string
+	header         *tview.TextView
+	timeTimer      *time.Timer
 }
 
 // Create a unified event handler struct
@@ -165,6 +167,7 @@ func (a *App) handleCreateEvent(email string) {
 }
 
 func (a *App) setupUI() {
+
 	// Create menu (left panel)
 	a.menu = tview.NewList()
 	a.menu.SetBorder(true)
@@ -400,6 +403,7 @@ func main() {
 
 	// Create the application
 	app := NewApp(graphHelper)
+	defer app.Cleanup()
 
 	organiserEmail := graphHelper.GetOrganiserEmail()
 	if organiserEmail == "" {
@@ -790,4 +794,31 @@ func (a *App) updateOutput(updates ...string) {
 			fmt.Fprintf(a.output, "%s", update)
 		}
 	})
+}
+
+func (a *App) updateHeader() {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	headerText := fmt.Sprintf("[yellow]Microsoft Graph Room Booking CLI[white] | %s", currentTime)
+	a.header.SetText(headerText)
+}
+
+func (a *App) startTimeUpdates() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			a.app.QueueUpdateDraw(func() {
+				a.updateHeader()
+			})
+		}
+	}
+}
+
+func (a *App) Cleanup() {
+	// Add any cleanup needed when the application exits
+	if a.timeTimer != nil {
+		a.timeTimer.Stop()
+	}
 }
