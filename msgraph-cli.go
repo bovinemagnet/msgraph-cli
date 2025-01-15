@@ -177,10 +177,17 @@ func (a *App) setupUI() {
 	a.output = tview.NewTextView().
 		SetDynamicColors(true).
 		SetScrollable(true).
+		//SetSelectable(true). // Enable text selection
+		SetWordWrap(true). // Enable word wrap
+		//SetBackgroundColor(tcell.ColorDarkGrey).
 		SetChangedFunc(func() {
 			a.app.Draw()
 		})
-	a.output.SetBorder(true).SetTitle("Output")
+
+	// Create a frame for the output with just top/bottom borders
+	outputFrame := tview.NewFrame(a.output).
+		SetBorders(0, 0, 1, 1, 0, 0). // top, bottom, left, right padding
+		AddText("Output:", true, tview.AlignLeft, tcell.ColorWhite)
 
 	// Create input field - single line
 	a.inputField = tview.NewInputField().
@@ -260,10 +267,10 @@ func (a *App) setupUI() {
 	a.layout = tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(a.header, 1, 1, false).
-		AddItem(a.output, 0, 8, false).
-		AddItem(a.inputField, 1, 1, false).    // Single line input
-		AddItem(a.webhookOutput, 8, 1, false). // Increased from 6 to 8
-		AddItem(a.menu, 0, 2, true)            // Decreased from 4 to 2
+		AddItem(outputFrame, 0, 8, false). // Use frame instead of direct output
+		AddItem(a.inputField, 1, 1, false).
+		AddItem(a.webhookOutput, 8, 1, false).
+		AddItem(a.menu, 0, 2, true)
 
 	// Start time updates in header
 	go a.startTimeUpdates()
