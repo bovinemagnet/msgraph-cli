@@ -270,8 +270,23 @@ func (a *App) setupUI() {
 
 	// Set up key bindings
 	a.layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// Check for Alt key combinations
+		if event.Modifiers() == tcell.ModAlt {
+			switch event.Rune() {
+			case 'o': // Alt-o
+				a.app.SetFocus(a.output)
+				return nil
+			case 'm': // Alt-m
+				a.app.SetFocus(a.menu)
+				return nil
+			case 'w': // Alt-w
+				a.app.SetFocus(a.webhookOutput)
+				return nil
+			}
+		}
+
+		// Original Esc handling
 		if event.Key() == tcell.KeyEsc {
-			// Switch focus between panels
 			if a.menu.HasFocus() {
 				a.app.SetFocus(a.output)
 			} else {
