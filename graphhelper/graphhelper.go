@@ -370,7 +370,7 @@ func (g *GraphHelper) CreateRoomSubscription(ctx context.Context, w io.Writer, r
 		return fmt.Errorf("failed to create subscription: %v", err)
 	}
 
-	log.Printf("Subscription created with ID: %s", *result.GetId())
+	fmt.Fprintf(w, "Subscription created with ID: [green]%s[white]\n", *result.GetId())
 	return nil
 }
 
@@ -386,9 +386,10 @@ func (g *GraphHelper) DeleteSubscription(w io.Writer, subscriptionId string) err
 
 	err := g.appClient.Subscriptions().BySubscriptionId(subscriptionId).Delete(context.Background(), nil)
 	if err != nil {
-		fmt.Fprintf(w, "failed to delete subscription: %v", err.Error())
+		fmt.Fprintf(w, "failed to delete subscription: [red]%v[white]\n", err.Error())
 		return fmt.Errorf("failed to create subscription: %v", err)
 	}
+	fmt.Fprintf(w, "Subscription deleted: [green]%s[white]\n", subscriptionId)
 	return nil
 }
 

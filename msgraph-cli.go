@@ -234,8 +234,9 @@ func (a *App) setupUI() {
 		{"Delete Event (Org)", '0', func() { a.handleDeleteEvent(a.organiserEmail) }},
 		{"Create Event (Room)", '1', func() { a.handleCreateEvent(a.roomEmail) }},
 		{"Create Event (Org)", '2', func() { a.handleCreateEvent(a.organiserEmail) }},
-		{"Create Subscription", '3', func() { a.HandleCreateSubscriptions() }},
-		{"Delete Subscription", '4', func() { a.HandleDeleteSubscriptions() }},
+		{"Create Subscription (room)", '3', func() { a.HandleCreateSubscriptions(a.roomEmail) }},
+		{"Create Subscription (org)", '4', func() { a.HandleCreateSubscriptions(a.organiserEmail) }},
+		{"Delete Subscription (room)", '5', func() { a.HandleDeleteSubscriptions() }},
 		{"Help", 'h', a.handleHelp},
 		{"Quit", 'q', func() { a.app.Stop() }},
 	}
@@ -366,14 +367,21 @@ func (a *App) appendToWebhookOutput(text string) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 
-		fmt.Fprintf(a.webhookOutput, "%s", text)
-		// Get the number of lines in the buffer
+		// Get current content and add new text
+		currentContent := a.webhookOutput.GetText(true)
+		newContent := currentContent + text
+
+		// Clear and set new content
+		a.webhookOutput.Clear()
+		fmt.Fprint(a.webhookOutput, newContent)
+
+		// Calculate scroll position to keep latest content visible
 		_, _, _, height := a.webhookOutput.GetInnerRect()
-		count := len(a.webhookOutput.GetText(true)) - height
-		if count > 0 {
-			// Scroll to bottom
-			a.webhookOutput.ScrollTo(count, 0)
+		lines := len(strings.Split(newContent, "\n\n"))
+		if lines > height {
+			a.webhookOutput.ScrollTo(lines-height, 0)
 		}
+
 	})
 }
 

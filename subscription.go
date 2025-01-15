@@ -92,22 +92,26 @@ func (a *App) HandleDeleteSubscriptions() {
 	// when enter is pressed, delete the subscription
 	a.inputField.SetDoneFunc(func(key tcell.Key) {
 		if key == tcell.KeyEnter {
+			fmt.Fprintf(a.output, "Deleting subscription [yellow]%s[white]\n", a.inputField.GetText())
 			a.graphHelper.DeleteSubscription(a.output, a.inputField.GetText())
+			a.inputField.SetText("")
+			a.app.SetFocus(a.output)
 		}
 	})
-	a.updateOutput()
+
+	//a.updateOutput()
 
 }
 
 // handle create subscription
-func (a *App) HandleCreateSubscriptions() {
+func (a *App) HandleCreateSubscriptions(email string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	a.output.Clear()
-	fmt.Fprintf(a.output, "Creating subscriptions...\n")
+	fmt.Fprintf(a.output, "Creating subscription on [yellow]%s[white]...\n", email)
 
-	a.graphHelper.CreateRoomSubscription(context.Background(), a.output, a.roomEmail)
+	a.graphHelper.CreateRoomSubscription(context.Background(), a.output, email)
 
 	a.app.SetFocus(a.output)
 }

@@ -23,12 +23,12 @@ func (a *App) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if validationToken := r.URL.Query().Get("validationToken"); validationToken != "" {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(validationToken))
-		a.appendToWebhookOutput(fmt.Sprintf("[green]Validation token received:[white] %s\n", validationToken))
+		a.appendToWebhookOutput(fmt.Sprintf("[green]Validation token received:[white] %s\n\n", validationToken))
 		return
 	}
 
 	// Handle webhook notification
-	a.appendToWebhookOutput(fmt.Sprintf("[yellow]Webhook notification:[white] %s\n", string(body)))
+	a.appendToWebhookOutput(fmt.Sprintf("[yellow]Webhook notification:[white] %s\n\n", string(body)))
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Notification received"))
 }
