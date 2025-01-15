@@ -171,7 +171,6 @@ func (a *App) setupUI() {
 	a.header = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter)
-	a.header.SetBorder(true).SetTitle("Header")
 	a.updateHeader() // Initial header update
 
 	// Create output panel
@@ -260,11 +259,11 @@ func (a *App) setupUI() {
 	// Create layout with adjusted heights
 	a.layout = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(a.header, 3, 1, false).
+		AddItem(a.header, 1, 1, false).
 		AddItem(a.output, 0, 8, false).
-		AddItem(a.inputField, 1, 1, false). // Single line input
-		AddItem(a.webhookOutput, 6, 1, false).
-		AddItem(a.menu, 0, 4, true) // Menu gets focus by default
+		AddItem(a.inputField, 1, 1, false).    // Single line input
+		AddItem(a.webhookOutput, 8, 1, false). // Increased from 6 to 8
+		AddItem(a.menu, 0, 2, true)            // Decreased from 4 to 2
 
 	// Start time updates in header
 	go a.startTimeUpdates()
