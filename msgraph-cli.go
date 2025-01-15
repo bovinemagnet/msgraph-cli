@@ -210,58 +210,43 @@ func (a *App) setupUI() {
 		})
 	a.webhookOutput.SetBorder(true).SetTitle("Webhook Events")
 
-	// Create menu
-	a.menu = tview.NewList().
-		ShowSecondaryText(false) //. // Hide descriptions for compact view
-	//SetSpacing(2)             // Space between items
+	// Create menu grid with 3 columns
+	menuGrid := tview.NewGrid().
+		SetColumns(-1, -1, -1). // Three equal columns
+		SetBorders(false)
 
-	a.menu.SetBorder(true).SetTitle("Menu")
+	// Define menu items globally
+	menuItems := []struct {
+		label    string
+		shortcut rune
+		handler  func()
+	}{
+		{"Env", 'e', a.handleEnv},
+		{"Access Token", 't', a.handleAccessToken},
+		{"Users", 'u', a.handleListUsers},
+		{"Subscriptions", 's', a.HandleListSubscriptions},
+		{"Rooms", 'r', a.handleListRooms},
+		{"Org Bookings", 'O', func() { a.handleListRoomBookings(a.organiserEmail) }},
+		{"Room Bookings", 'R', func() { a.handleListRoomBookings(a.roomEmail) }},
+		{"Org Subscribe", '7', func() { a.handleCreateOneDaySubscription(a.organiserEmail) }},
+		{"Room Subscribe", '8', func() { a.handleCreateOneDaySubscription(a.roomEmail) }},
+		{"Delete (Room)", '9', func() { a.handleDeleteEvent(a.roomEmail) }},
+		{"Delete (Org)", '0', func() { a.handleDeleteEvent(a.organiserEmail) }},
+		{"Create (Room)", '1', func() { a.handleCreateEvent(a.roomEmail) }},
+		{"Create (Org)", '2', func() { a.handleCreateEvent(a.organiserEmail) }},
+		{"Help", 'h', a.handleHelp},
+		{"Quit", 'q', func() { a.app.Stop() }},
+	}
 
-	a.menu.AddItem("Env", "Show the contents of the .env file", 'e', a.handleEnv)
+	// Add items to grid
+	for i, item := range menuItems {
+		btn := tview.NewButton(fmt.Sprintf("%c: %s", item.shortcut, item.label)).
+			SetSelectedFunc(item.handler)
+		row, col := i/3, i%3 // Distribute items across 3 columns
+		menuGrid.AddItem(btn, row, col, 1, 1, 0, 0, true)
+	}
 
-	a.menu.AddItem("Access Token", "Show the current access token", 't', a.handleAccessToken)
-
-	a.menu.AddItem("All Users", "List all users", 'u', a.handleListUsers)
-	a.menu.AddItem("All Subscriptions", "List all subscriptions", 's', a.HandleListSubscriptions)
-	a.menu.AddItem("All Rooms", "List all rooms", 'r', a.handleListRooms)
-
-	a.menu.AddItem("Room Bookings (Organiser)", "List room bookings for "+a.organiserEmail, 'O', func() {
-		a.handleListRoomBookings(a.organiserEmail)
-	})
-	a.menu.AddItem("Room Bookings (Room)", "List room bookings for "+a.roomEmail, 'R', func() {
-		a.handleListRoomBookings(a.roomEmail)
-	})
-	a.menu.AddItem("Org Subscribe", "Create a 1 day subscription for "+a.organiserEmail, '7', func() {
-		a.handleCreateOneDaySubscription(a.organiserEmail)
-	})
-	a.menu.AddItem("Room Subscribe", "Create a 1 day subscription for"+a.roomEmail, '8', func() {
-		a.handleCreateOneDaySubscription(a.roomEmail)
-	})
-
-	a.menu.AddItem("Delete event", " id - By Room  "+a.roomEmail+" ", '9', func() {
-		a.handleDeleteEvent(a.roomEmail)
-	})
-	a.menu.AddItem("Delete event", " id - By Organiser  "+a.organiserEmail+"]", '9', func() {
-		a.handleDeleteEvent(a.organiserEmail)
-	})
-
-	a.menu.AddItem(" Create Event", "at 10 to 10:30 tomorrow - By Room ["+a.roomEmail+"]", 11, func() {
-		a.handleCreateEvent(a.roomEmail)
-	})
-	a.menu.AddItem(" Create Event", "at 10 to 10:30 tomorrow - By Organiser ["+a.organiserEmail+"]", 12, func() {
-		a.handleCreateEvent(a.organiserEmail)
-	})
-	//	fmt.Println("  13. Check room exists - By Room [" + roomEmail + "]")
-	//	fmt.Println("  14. Check room exists - By Organiser [" + organiserEmail + "]")
-
-	a.menu.AddItem("Enter Text", "Display text from input field", 'I', func() {
-		a.app.SetFocus(a.inputField)
-	})
-	a.menu.AddItem("Help", "Show the help text", 'h', a.handleHelp)
-
-	a.menu.AddItem("Quit", "Exit the application", 'q', func() {
-		a.app.Stop()
-	})
+	menuGrid.SetBorder(true).SetTitle("Menu")
 
 	// Create layout with adjusted heights
 	a.layout = tview.NewFlex().
@@ -270,36 +255,54 @@ func (a *App) setupUI() {
 		AddItem(outputFrame, 0, 8, false). // Use frame instead of direct output
 		AddItem(a.inputField, 1, 1, false).
 		AddItem(a.webhookOutput, 8, 1, false).
-		AddItem(a.menu, 0, 2, true)
+		AddItem(menuGrid, 0, 2, true)
 
 	// Start time updates in header
 	go a.startTimeUpdates()
 
-	// Set up key bindings
-	a.layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		// Check for Alt key combinations
+	// Set up global key bindings
+	a.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// Don't handle shortcuts when input field has focus
+		if a.inputField.HasFocus() {
+			return event
+		}
+
+		// Handle menu shortcuts
+		for _, item := range menuItems {
+			if event.Rune() == item.shortcut {
+				item.handler()
+				return nil
+			}
+		}
+
+		// Handle Alt key combinations
 		if event.Modifiers() == tcell.ModAlt {
 			switch event.Rune() {
 			case 'o': // Alt-o
 				a.app.SetFocus(a.output)
 				return nil
 			case 'm': // Alt-m
-				a.app.SetFocus(a.menu)
+				a.app.SetFocus(menuGrid)
 				return nil
 			case 'w': // Alt-w
 				a.app.SetFocus(a.webhookOutput)
 				return nil
+			case 'i': // Alt-i
+				a.app.SetFocus(a.inputField)
+				return nil
 			}
 		}
 
-		// Original Esc handling
+		// Handle Esc
 		if event.Key() == tcell.KeyEsc {
-			if a.menu.HasFocus() {
+			if menuGrid.HasFocus() {
 				a.app.SetFocus(a.output)
 			} else {
-				a.app.SetFocus(a.menu)
+				a.app.SetFocus(menuGrid)
 			}
+			return nil
 		}
+
 		return event
 	})
 
