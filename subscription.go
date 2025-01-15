@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bovinemagnet/msgraph-cli/graphhelper"
+	"github.com/gdamore/tcell/v2"
 )
 
 func (a *App) HandleListSubscriptions() {
@@ -77,4 +78,36 @@ func listSubscriptions(graphHelper *graphhelper.GraphHelper) {
 		fmt.Println()
 
 	}
+}
+
+func (a *App) HandleDeleteSubscriptions() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.output.Clear()
+	fmt.Fprintf(a.output, "Deleting subscriptions...\n")
+
+	// Switch to the input field
+	a.app.SetFocus(a.inputField)
+	// when enter is pressed, delete the subscription
+	a.inputField.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter {
+			a.graphHelper.DeleteSubscription(a.output, a.inputField.GetText())
+		}
+	})
+	a.updateOutput()
+
+}
+
+// handle create subscription
+func (a *App) HandleCreateSubscriptions() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.output.Clear()
+	fmt.Fprintf(a.output, "Creating subscriptions...\n")
+
+	a.graphHelper.CreateRoomSubscription(context.Background(), a.output, a.roomEmail)
+
+	a.app.SetFocus(a.output)
 }

@@ -223,17 +223,19 @@ func (a *App) setupUI() {
 	}{
 		{"Env", 'e', a.handleEnv},
 		{"Access Token", 't', a.handleAccessToken},
-		{"Users", 'u', a.handleListUsers},
-		{"Subscriptions", 's', a.HandleListSubscriptions},
-		{"Rooms", 'r', a.handleListRooms},
-		{"Org Bookings", 'O', func() { a.handleListRoomBookings(a.organiserEmail) }},
-		{"Room Bookings", 'R', func() { a.handleListRoomBookings(a.roomEmail) }},
+		{"List Users", 'u', a.handleListUsers},
+		{"List Subscriptions", 's', a.HandleListSubscriptions},
+		{"List Rooms", 'r', a.handleListRooms},
+		{"List Org Bookings", 'O', func() { a.handleListRoomBookings(a.organiserEmail) }},
+		{"List Room Bookings", 'R', func() { a.handleListRoomBookings(a.roomEmail) }},
 		{"Org Subscribe", '7', func() { a.handleCreateOneDaySubscription(a.organiserEmail) }},
 		{"Room Subscribe", '8', func() { a.handleCreateOneDaySubscription(a.roomEmail) }},
-		{"Delete (Room)", '9', func() { a.handleDeleteEvent(a.roomEmail) }},
-		{"Delete (Org)", '0', func() { a.handleDeleteEvent(a.organiserEmail) }},
-		{"Create (Room)", '1', func() { a.handleCreateEvent(a.roomEmail) }},
-		{"Create (Org)", '2', func() { a.handleCreateEvent(a.organiserEmail) }},
+		{"Delete Event (Room)", '9', func() { a.handleDeleteEvent(a.roomEmail) }},
+		{"Delete Event (Org)", '0', func() { a.handleDeleteEvent(a.organiserEmail) }},
+		{"Create Event (Room)", '1', func() { a.handleCreateEvent(a.roomEmail) }},
+		{"Create Event (Org)", '2', func() { a.handleCreateEvent(a.organiserEmail) }},
+		{"Create Subscription", '3', func() { a.HandleCreateSubscriptions() }},
+		{"Delete Subscription", '4', func() { a.HandleDeleteSubscriptions() }},
 		{"Help", 'h', a.handleHelp},
 		{"Quit", 'q', func() { a.app.Stop() }},
 	}
@@ -262,8 +264,13 @@ func (a *App) setupUI() {
 
 	// Set up global key bindings
 	a.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		// Don't handle shortcuts when input field has focus
+		// Special handling for input field
 		if a.inputField.HasFocus() {
+			if event.Key() == tcell.KeyEsc {
+				a.inputField.SetText("") // Clear input
+				a.app.SetFocus(menuGrid) // Return focus to menu
+				return nil
+			}
 			return event
 		}
 
@@ -293,7 +300,7 @@ func (a *App) setupUI() {
 			}
 		}
 
-		// Handle Esc
+		// Handle Esc for other windows
 		if event.Key() == tcell.KeyEsc {
 			if menuGrid.HasFocus() {
 				a.app.SetFocus(a.output)
@@ -820,9 +827,7 @@ func (a *App) startTimeUpdates() {
 	for {
 		select {
 		case <-ticker.C:
-			a.app.QueueUpdateDraw(func() {
-				a.updateHeader()
-			})
+			a.updateHeader()
 		}
 	}
 }
