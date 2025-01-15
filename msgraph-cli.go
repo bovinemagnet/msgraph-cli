@@ -167,11 +167,49 @@ func (a *App) handleCreateEvent(email string) {
 }
 
 func (a *App) setupUI() {
+	// Create header
+	a.header = tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	a.header.SetBorder(true).SetTitle("Header")
+	a.updateHeader() // Initial header update
 
-	// Create menu (left panel)
-	a.menu = tview.NewList()
-	a.menu.SetBorder(true)
-	a.menu.SetTitle("Menu")
+	// Create output panel
+	a.output = tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetChangedFunc(func() {
+			a.app.Draw()
+		})
+	a.output.SetBorder(true).SetTitle("Output")
+
+	// Create input field - single line
+	a.inputField = tview.NewInputField().
+		SetLabel("Input: ").
+		SetFieldWidth(0). // Full width
+		SetDoneFunc(func(key tcell.Key) {
+			if key == tcell.KeyEnter {
+				inputText := a.inputField.GetText()
+				a.handleInput(inputText)
+				a.inputField.SetText("")
+			}
+		})
+
+	// Create webhook output panel
+	a.webhookOutput = tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetChangedFunc(func() {
+			a.app.Draw()
+		})
+	a.webhookOutput.SetBorder(true).SetTitle("Webhook Events")
+
+	// Create menu
+	a.menu = tview.NewList().
+		ShowSecondaryText(false) //. // Hide descriptions for compact view
+	//SetSpacing(2)             // Space between items
+
+	a.menu.SetBorder(true).SetTitle("Menu")
 
 	a.menu.AddItem("Env", "Show the contents of the .env file", 'e', a.handleEnv)
 
@@ -219,69 +257,17 @@ func (a *App) setupUI() {
 		a.app.Stop()
 	})
 
-	// Add help text to the footer
-	//helpText := " F5: Refresh Rooms | Q: Quit "
-	//a.footer.SetText(helpText).SetTextAlign(tview.AlignCenter)
-
-	// Create output panel (right panel)
-	a.output = tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetChangedFunc(func() {
-			a.app.Draw()
-		})
-	a.output.SetBorder(true).SetTitle("Output")
-
-	// Add initial help text
-	fmt.Fprintf(a.output, `[yellow]Navigation Help:[white]
-• Press [green]ESC[white] to switch focus between menu and output
-• Use [green]PgUp[white]/[green]PgDn[white] to scroll when output has focus
-• Use mouse wheel to scroll (if your terminal supports it)
-• Use arrow keys [green]↑[white]/[green]↓[white] to scroll line by line
-`)
-
-	// Create webhook output panel (bottom)
-	a.webhookOutput = tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetChangedFunc(func() {
-			a.app.Draw()
-		})
-	a.webhookOutput.SetBorder(true).SetTitle("Webhook Events")
-
-	// Add initial notification URL
-	notificationURL := a.graphHelper.GetNotificationUrl()
-	fmt.Fprintf(a.webhookOutput, "[yellow]Webhook Endpoint:[white] %s\n", notificationURL)
-	fmt.Fprintf(a.webhookOutput, "[yellow]Listening for events...[white]\n")
-
-	// Create input field
-	a.inputField = tview.NewInputField().
-		SetLabel("Input: ").
-		SetFieldWidth(30).
-		SetDoneFunc(func(key tcell.Key) {
-			if key == tcell.KeyEnter {
-				inputText := a.inputField.GetText()
-				a.handleInput(inputText)
-				a.inputField.SetText("")
-			}
-		})
-
-	// Setup footer
-	a.footer = tview.NewTextView().
-		SetTextAlign(tview.AlignRight).
-		SetDynamicColors(true).
-		SetText(" F5: Refresh Rooms | Q: Quit ")
-
-	// Create layout
-	topPanels := tview.NewFlex().
-		AddItem(a.menu, 30, 1, true).
-		AddItem(a.output, 0, 2, false)
-
+	// Create layout with adjusted heights
 	a.layout = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(topPanels, 0, 2, true).
-		AddItem(a.webhookOutput, 10, 1, false).
-		AddItem(a.inputField, 1, 1, true) // Add input field at the bottom
+		AddItem(a.header, 3, 1, false).
+		AddItem(a.output, 0, 8, false).
+		AddItem(a.inputField, 1, 1, false). // Single line input
+		AddItem(a.webhookOutput, 6, 1, false).
+		AddItem(a.menu, 0, 4, true) // Menu gets focus by default
+
+	// Start time updates in header
+	go a.startTimeUpdates()
 
 	// Set up key bindings
 	a.layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -296,6 +282,7 @@ func (a *App) setupUI() {
 		return event
 	})
 
+	// Set up scroll handlers
 	a.output.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		row, _ := a.output.GetScrollOffset()
 		switch event.Key() {
